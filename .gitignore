@@ -1,0 +1,12 @@
+.rebar
+.eunit
+deps
+ebin/
+log/
+.DS_Store
+erl_crash.dump
+tags
+callgrind
+callgrind.out
+outfile.cgrind
+outfile.fprof
