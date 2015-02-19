@@ -1,138 +1,150 @@
 -module(eappstat).
 
--export([plot/1, proc_info_and_reply/3, rank_fraction_half_cdf/1]).
+-export([capture/1, plot/1, proc_info_async/4]).
 
-plot(Node) ->
-    io:format("Node: ~p @ ~p UTC\n\n", [Node, calendar:now_to_universal_time(os:timestamp())]),
+-record(capture, {tree, time}).
+-record(node, {type, name, proc_info, pid, children = []}).
+-record(env, {time, total_reductions, depth}).
+
+%%%%%%%%%%%%%%%%%%%%%%% capturing data
+
+capture(Node) ->
     case net_adm:ping(Node) of
         pang ->
-            io:format("can't connect to node, is the node up and are you using the right cookie?", []);
+            io:format("can't connect to node, is the node up and are you using the right cookie?\n", []);
         pong ->
             Apps = [App || {App, _, _} <- rpc:call(Node, application, which_applications, [])],
-            ProcInfoByApp    = [app_proc_info(Node, App) || App <- Apps],
-            AllProcInfos = lists:append([[ProcInfo || {_Pid, ProcInfo} <- PidProcInfos] || {_App, PidProcInfos}<- ProcInfoByApp]),
-            AllRedsSum = lists:sum([from_proc_info(reductions, ProcInfo) || ProcInfo <- AllProcInfos]),
-            f("Reductions/s from all apps: ~p", [AllRedsSum]),
-            [plot(Node, App, {AllRedsSum, proplists:get_value(App, ProcInfoByApp)}) || App <- Apps]
-    end,
-    ok.
-
-app_proc_info(Node, App) ->
-    case app_pid(Node, App) of
-        undefined ->
-            0;
-        AppPid ->
-            {AppSupPid, _} = application_master:get_child(AppPid),
-            AppPids = pids(AppSupPid),
-            {App, proc_info(Node, AppPids)}
+            Children = [application_proc_info_request(Node, App) || App <- Apps],
+            Skeleton =
+            #node{type = node,
+                  name = Node,
+                  children = lists:filter(fun(E) -> E =/= undefined end, Children)
+            },
+            Tree = proc_info_collect(Skeleton),
+            #capture{ tree = Tree, time = os:timestamp() }
     end.
 
+application_proc_info_request(Node, App) ->
+    case app_pid(Node, App) of
+        undefined ->
+            undefined;
+        AppPid ->
+            {AppSupPid, _}  = application_master:get_child(AppPid),
+            Children        = [node(Node, Process) || Process <- rpc:call(Node, supervisor, which_children, [AppSupPid])],
+            ChildrenSort    = lists:sort(fun(A, B) -> A#node.name =< B#node.name end, Children),
+            #node{type      = application,
+                  name      = App,
+                  proc_info = proc_info_request(Node, AppPid),
+                  children  = ChildrenSort
+            }
+    end.
 
 app_pid(Node, App) ->
     proplists:get_value(App, proplists:get_value(running, rpc:call(Node, application_controller, info, []))).
 
-plot(Node, App, {AllRedsSum, ProcInfos}) ->
-    case app_pid(Node, App) of
-        undefined ->
-            noop;
-        AppPid ->
-            io:format("\n----------------------------            ~p\n", [App]),
-            AppRedsSum = lists:sum([from_proc_info(reductions, ProcInfo) || {_Pid, ProcInfo} <- ProcInfos]),
-            case AppRedsSum of
-                0 ->
-                    f("0 Reductions/s - skipping.", []);
-                _ ->
-                    AppPid = app_pid(Node, App),
-                    {AppSupPid, _} = application_master:get_child(AppPid),
-                    f("App Reductions/s ~p", [AppRedsSum], 0, {AllRedsSum, AppRedsSum}),
-                    f("----------------------------", []),
-                    [plot_process(Node, Process, {AllRedsSum, ProcInfos}, 1) || Process <- supervisor:which_children(AppSupPid)]
-            end
+node(Node, {Name, Pid, worker, _Mods}) ->
+    #node{type      = worker,
+          name      = Name,
+          proc_info = proc_info_request(Node, Pid),
+          children  = []
+    };
+node(Node, {Name, Pid, supervisor, _Mods}) ->
+    #node{type      = supervisor,
+          name      = Name,
+          proc_info = proc_info_request(Node, Pid),
+          children  = [node(Node, Process) || Process <- rpc:call(Node, supervisor, which_children, [Pid])]
+    }.
+
+proc_info_request(Node, Pid) when is_pid(Pid) ->
+    Ref = make_ref(),
+    spawn_link(?MODULE, proc_info_async, [Node, Pid, self(), Ref]),
+    Ref.
+
+proc_info_async(Node, Pid, From, Ref) ->
+    ProcInfo1 = rpc:call(Node, erlang, process_info, [Pid]),
+    Red1      = proplists:get_value(reductions, ProcInfo1),
+    timer:sleep(1000),
+    ProcInfo2 = rpc:call(Node, erlang, process_info, [Pid]),
+    Red2      = proplists:get_value(reductions, ProcInfo2),
+    Red1s     = Red2 - Red1,
+    ProcInfo  = [{reductions, Red1s} | proplists:delete(reductions, ProcInfo1)],
+    From ! {proc_info, Ref, ProcInfo}.
+
+proc_info_collect(Node = #node{ proc_info = undefined, children = Children }) ->
+    Node#node{ children = [proc_info_collect(Child) || Child <- Children] };
+
+proc_info_collect(Node = #node{ proc_info = Ref, children = Children }) ->
+    ProcInfo =
+    receive
+        {proc_info, Ref, PI} ->
+            PI
+    after 10000 ->
+        throw(timeout)
     end,
+    Node#node{ proc_info = ProcInfo, children = [proc_info_collect(Child) || Child <- Children] }.
+
+%%%%%%%%%%%%%%%%%%%%%%% plotting
+
+plot(#capture{ tree = Tree, time = Time }) ->
+    ReductionSum = reductions_sum(Tree),
+    Env = #env{
+     total_reductions = ReductionSum,
+     depth            = 0
+    },
+    f("captured at ~p UTC", [calendar:now_to_universal_time(Time)]),
+    f("total reductions: ~p", [ReductionSum]),
+    plot(Tree, Env),
     ok.
 
-plot_process(_Node, {Name, Pid, worker, _Mods}, Reds, Depth) ->
-    f("w: ~p ", [Name], Depth, reds_for(Pid, Reds));
-plot_process(Node, {Name, Pid, supervisor, _Mods}, {AllRedsSum, ProcInfos}, Depth) ->
-    f("s: ~p ", [Name], Depth, reds_for(Pid, {AllRedsSum, ProcInfos})),
-    Children =  rpc:call(Node, supervisor, which_children, [Pid]),
-    case is_pool(Children, ProcInfos) of
-        true ->
-            plot_pool(Node, Children, {AllRedsSum, ProcInfos}, Depth);
-        false ->
-            [plot_process(Node, Process, {AllRedsSum, ProcInfos}, Depth + 1) || Process <- Children]
-    end.
-
-reds_for(Pid, {AllRedsSum, ProcInfos}) ->
-     {AllRedsSum, from_proc_info(reductions, proplists:get_value(Pid, ProcInfos))}.
-
-plot_pool(_, Children, {AllRedsSum, ProcInfos}, Depth) ->
-    RedForPid = fun(Pid) ->
-        {_, ProcReds} = reds_for(Pid, {AllRedsSum, ProcInfos}),
-        ProcReds
+reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
+    Increment =
+    case ProcInfo of
+        undefined -> 0;
+        _         -> proplists:get_value(reductions, ProcInfo)
     end,
-    Pids = [Pid || {_, Pid, _, _} <- Children],
-    Reductions = [RedForPid(Pid) || Pid <- Pids],
-    RedsSum = lists:sum(Reductions),
-    case RedsSum of
-        0 ->
-            f("p: ~p x", [length(Children)], Depth + 1, {AllRedsSum, RedsSum});
-        _ ->
-            LoadUniformity = rank_fraction_half_cdf(Reductions) * 100,
-            f("p: ~p x, Load uniformity ~.1f%", [length(Children), LoadUniformity], Depth + 1, {AllRedsSum, RedsSum})
+    Increment + lists:sum([reductions_sum(Child) || Child <- Children]).
+
+plot(Node, Env) ->
+    print(Node, Env),
+    NewEnv = Env#env{ depth = Env#env.depth + 1 },
+    case is_pool(Node#node.children) of
+        true ->
+            plot_pool(Node#node.children, Env);
+        false ->
+            [plot(Child, NewEnv) || Child <- Node#node.children]
     end.
 
-proc_info_async(Node, Pid) ->
-    spawn(?MODULE, proc_info_and_reply, [Node, Pid, self()]).
-
-proc_info_and_reply(Node, Pid, From) ->
-    ProcInfo = proc_info(Node, Pid),
-    From ! {proc_info, Pid, ProcInfo}.
-
-proc_info(Node, Pids) when is_list(Pids) ->
-    [proc_info_async(Node, Pid) || Pid <- Pids],
-    wait_for_proc_info(length(Pids), []);
-
-proc_info(Node, Process) ->
-    Red1 = from_proc_info(reductions, pid_info(Node, Process)),
-    timer:sleep(1000),
-    ProcInfo = pid_info(Node, Process),
-    Red2  = from_proc_info(reductions, ProcInfo),
-    Red1s = Red2 - Red1,
-    [{reductions, Red1s} | proplists:delete(reductions, ProcInfo)].
-
-wait_for_proc_info(0, Acc) ->
-    Acc;
-wait_for_proc_info(Length, Acc) ->
-    receive
-        {proc_info, Pid, Reductions} ->
-            wait_for_proc_info(Length - 1, [{Pid, Reductions} | Acc])
-    after 5000 ->
-        throw(timeout)
+plot_pool(Members, Env) ->
+    Reductions = [reductions_sum(Member) || Member <- Members],
+    Balance    = rank_fraction_half_cdf(Reductions),
+    case is_number(Balance) of
+        true ->
+            f("p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.depth + 1);
+        false ->
+            f("p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.depth + 1)
     end.
 
-pids(AppSupPid) when is_pid(AppSupPid) ->
-    lists:flatten(pids({'_', AppSupPid, supervisor, '_'}, [])).
 
-pids({_, Pid, worker, _}, Acc) ->
-    [Pid | Acc];
-pids({_, Pid, supervisor, _}, Acc) ->
-    [Pid | [pids(Proc, Acc) || Proc <- supervisor:which_children(Pid)]].
+print(Node = #node{ type = node }, Env) ->
+    f("n: ~p", [Node#node.name], Env#env.depth,  {Env#env.total_reductions, Env#env.total_reductions});
+print(Node = #node{ type = application }, Env) ->
+    f("a: ~p ", [Node#node.name], Env#env.depth, {Env#env.total_reductions, reductions_sum(Node)});
+print(Node = #node{ type = supervisor }, Env) ->
+    f("s: ~p ", [Node#node.name], Env#env.depth, {Env#env.total_reductions, reductions_sum(Node)});
+print(Node = #node{ type = worker }, Env) ->
+    f("w: ~p ", [Node#node.name], Env#env.depth, {Env#env.total_reductions, reductions_sum(Node)});
+print(_, _) ->
+    noop.
 
-from_proc_info(Key, ProcInfo) ->
-    proplists:get_value(Key, ProcInfo).
-
-is_pool([_], _) ->
+is_pool([_]) ->
     false;
-is_pool(Children, ProcInfos) ->
-    Pids = [Pid || {_, Pid, worker, _} <- Children],
-    InitalCalls = [from_proc_info(initial_call, proplists:get_value(Pid, ProcInfos)) || Pid <- Pids],
-    length(lists:usort(InitalCalls)) == 1.
-
-pid_info(Node, {_, Pid, _, _}) ->
-    pid_info(Node, Pid);
-pid_info(Node, Pid) ->
-    rpc:call(Node, erlang, process_info, [Pid]).
+is_pool(Members) ->
+    AllWorkers = lists:all(fun(M) -> M#node.type == worker end, Members),
+    InitialCalls =
+    [proplists:get_value('$initial_call', proplists:get_value(dictionary, Member#node.proc_info))
+     || Member <- Members],
+    AllSameCalls = length(lists:usort(InitialCalls)) == 1,
+    AllWorkers and AllSameCalls.
 
 f(String, Args) ->
     f(String, Args, 0).
@@ -155,9 +167,14 @@ f(String, Args, Depth, {AppReds, ProcReds}) ->
 
 rank_fraction_half_cdf(Values) ->
     Sum = lists:sum(Values),
-    ValuesSort = lists:reverse(lists:sort(Values)),
-    Rank50 = first_exceed(ValuesSort, Sum / 2, 0, 0),
-    Rank50 / length(Values) * 2.
+    case Sum of
+        0 ->
+            "-";
+        _ ->
+            ValuesSort = lists:reverse(lists:sort(Values)),
+            Rank50 = first_exceed(ValuesSort, Sum / 2, 0, 0),
+            Rank50 / length(Values) * 2
+    end.
 
 first_exceed([Next | Rest], Threshold, Sum, Rank) ->
     case Next + Sum >= Threshold of
