@@ -1,10 +1,31 @@
 -module(eappstat).
+-include("cecho.hrl").
 
--export([capture/1, plot/1, proc_info_async/4]).
+-export([capture_and_plot/1, capture/1, plot/1, proc_info_async/4]).
 
 -record(capture, {tree, time}).
 -record(node, {type, name, proc_info, pid, children = []}).
--record(env, {time, total_reductions, depth}).
+-record(env, {time, total_reductions, x, y, x_max, y_max}).
+
+-define(WHITE, 1).
+-define(GREEN, 2).
+-define(YELLOW, 3).
+-define(RED, 3).
+
+capture_and_plot(Node) ->
+    setup(),
+    Capture = capture(Node),
+    plot(Capture).
+
+setup() ->
+    ok = application:start(cecho),
+    cecho:cbreak(),
+    cecho:noecho(),
+    cecho:start_color(),
+    cecho:curs_set(?ceCURS_INVISIBLE),
+    cecho:init_pair(?WHITE, ?ceCOLOR_WHITE, ?ceCOLOR_BLACK),
+    cecho:init_pair(?YELLOW, ?ceCOLOR_YELLOW, ?ceCOLOR_BLACK),
+    cecho:init_pair(?RED, ?ceCOLOR_RED, ?ceCOLOR_BLACK).
 
 %%%%%%%%%%%%%%%%%%%%%%% capturing data
 
@@ -85,15 +106,21 @@ proc_info_collect(Node = #node{ proc_info = Ref, children = Children }) ->
 
 %%%%%%%%%%%%%%%%%%%%%%% plotting
 
-plot(#capture{ tree = Tree, time = Time }) ->
+plot(Capture) ->
+    plot(Capture, #env{}).
+
+plot(#capture{ tree = Tree, time = Time }, Env) ->
     ReductionSum = reductions_sum(Tree),
-    Env = #env{
+    EnvNew = Env#env{
      total_reductions = ReductionSum,
-     depth            = 0
+     x = 0,
+     y = 2
     },
-    f("captured at ~p UTC", [calendar:now_to_universal_time(Time)]),
-    f("total reductions: ~p", [ReductionSum]),
-    plot(Tree, Env),
+    f(0, 0, "limits ~p", [cecho:getmaxyx()]),
+    f(0, 0, "captured at ~p UTC", [calendar:now_to_universal_time(Time)]),
+    f(0, 1, "total reductions: ~p", [ReductionSum]),
+    plot_table(Tree, EnvNew),
+    cecho:refresh(),
     ok.
 
 reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
@@ -104,14 +131,15 @@ reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
     end,
     Increment + lists:sum([reductions_sum(Child) || Child <- Children]).
 
-plot(Node, Env) ->
+plot_table(Node, Env) ->
     print(Node, Env),
-    NewEnv = Env#env{ depth = Env#env.depth + 1 },
+    NewEnv = Env#env{ x = Env#env.x + 2, y = Env#env.y + 1 },
     case is_pool(Node#node.children) of
         true ->
-            plot_pool(Node#node.children, Env);
+            plot_pool(Node#node.children, NewEnv),
+            Env#env.y + 2;
         false ->
-            [plot(Child, NewEnv) || Child <- Node#node.children]
+            lists:foldl(fun(Child, Y) -> plot_table(Child, NewEnv#env{ y = Y }) end, Env#env.y + 1, Node#node.children)
     end.
 
 plot_pool(Members, Env) ->
@@ -119,20 +147,20 @@ plot_pool(Members, Env) ->
     Balance    = rank_fraction_half_cdf(Reductions),
     case is_number(Balance) of
         true ->
-            f("p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.depth + 1);
+            f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.x + 1);
         false ->
-            f("p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.depth + 1)
+            f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.x + 1)
     end.
 
 
 print(Node = #node{ type = node }, Env) ->
-    f("n: ~p", [Node#node.name], Env#env.depth,  {Env#env.total_reductions, Env#env.total_reductions});
+    f(Env#env.x, Env#env.y, "n: ~p", [Node#node.name], Env#env.x,  {Env#env.total_reductions, Env#env.total_reductions});
 print(Node = #node{ type = application }, Env) ->
-    f("a: ~p ", [Node#node.name], Env#env.depth, {Env#env.total_reductions, reductions_sum(Node)});
+    f(Env#env.x, Env#env.y, "a: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)});
 print(Node = #node{ type = supervisor }, Env) ->
-    f("s: ~p ", [Node#node.name], Env#env.depth, {Env#env.total_reductions, reductions_sum(Node)});
+    f(Env#env.x, Env#env.y, "s: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)});
 print(Node = #node{ type = worker }, Env) ->
-    f("w: ~p ", [Node#node.name], Env#env.depth, {Env#env.total_reductions, reductions_sum(Node)});
+    f(Env#env.x, Env#env.y, "w: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)});
 print(_, _) ->
     noop.
 
@@ -146,24 +174,45 @@ is_pool(Members) ->
     AllSameCalls = length(lists:usort(InitialCalls)) == 1,
     AllWorkers and AllSameCalls.
 
-f(String, Args) ->
-    f(String, Args, 0).
+f(X, Y, String, Args) ->
+    f(X, Y, String, Args, 0).
 
-f(String, Args, Depth) ->
-    io:format(fnorm(String, Args, Depth) ++ "\n", []).
+f(X, Y, String, Args, Depth) ->
+    case move_if_ok(Y, X) of
+        ok ->
+            cecho:addstr(io_lib:format(fnorm(String, Args) ++ "\n", []));
+        not_ok ->
+            noop
+    end.
 
-fnorm(String, Args, Depth) ->
-    Spacer          = ["  " || _ <- lists:seq(1, Depth)],
-    StringFormat    = binary_to_list(iolist_to_binary(io_lib:format(Spacer ++ String, Args))),
-    StringFormatPad = StringFormat ++ [" "||_<-lists:seq(1, 50)],
-    string:substr(StringFormatPad, 1, 40).
-
-f(String, Args, Depth, {AppReds, ProcReds}) ->
-    Left  = fnorm(String, Args, Depth),
+f(X, Y, String, Args, Depth, {AppReds, ProcReds}) ->
+    Left  = fnorm(String, Args),
     Fract = ProcReds / AppReds,
     Bar   = trunc(Fract * 32),
     Right = ["-" || _ <- lists:seq(1, Bar)] ++ io_lib:format("~.1f%", [Fract * 100]),
-    io:format(Left ++ Right ++ "\n", []).
+    case move_if_ok(Y, X) of
+        ok ->
+            cecho:addstr(Left),
+            cecho:move(Y, 50),
+            load_color(Fract),
+            cecho:addstr(Right),
+            color(?WHITE);
+        not_ok ->
+            noop
+    end.
+
+move_if_ok(X, Y) ->
+    {My, _Mx} = cecho:getmaxyx(),
+    case Y < My of
+        true ->
+            cecho:move(X, Y),
+            ok;
+        false ->
+            not_ok
+    end.
+
+fnorm(String, Args) ->
+    binary_to_list(iolist_to_binary(io_lib:format(String, Args))).
 
 rank_fraction_half_cdf(Values) ->
     Sum = lists:sum(Values),
@@ -173,7 +222,7 @@ rank_fraction_half_cdf(Values) ->
         _ ->
             ValuesSort = lists:reverse(lists:sort(Values)),
             Rank50 = first_exceed(ValuesSort, Sum / 2, 0, 0),
-            Rank50 / length(Values) * 2
+            Rank50 / length(Values) * 2.0
     end.
 
 first_exceed([Next | Rest], Threshold, Sum, Rank) ->
@@ -183,3 +232,15 @@ first_exceed([Next | Rest], Threshold, Sum, Rank) ->
         false ->
             first_exceed(Rest, Threshold, Next + Sum, Rank + 1)
     end.
+
+color(Color) ->
+    cecho:attron(?ceCOLOR_PAIR(Color)).
+
+load_color(Fract) ->
+    Color =
+    case Fract of
+        _ when Fract < 0.333 -> ?WHITE;
+        _ when Fract < 0.666 -> ?YELLOW;
+        _ -> ?RED
+    end,
+    color(Color).
