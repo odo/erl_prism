@@ -1,21 +1,49 @@
 -module(eappstat).
 -include("cecho.hrl").
 
--export([capture_and_plot/1, capture/1, plot/1, proc_info_async/4]).
+-export([start/1, capture_and_plot/2, capture/1, plot/2, proc_info_async/4]).
 
 -record(capture, {tree, time}).
 -record(node, {type, name, proc_info, pid, children = []}).
--record(env, {time, total_reductions, x, y, x_max, y_max}).
+-record(env, {time, total_reductions, x, y, x_max, y_max, cursor_y}).
 
 -define(WHITE, 1).
 -define(GREEN, 2).
 -define(YELLOW, 3).
--define(RED, 3).
+-define(RED, 4).
+-define(WHITE_HL, 5).
+-define(GREEN_HL, 6).
+-define(YELLOW_HL, 7).
+-define(RED_HL, 8).
 
-capture_and_plot(Node) ->
+
+start(Node) ->
     setup(),
+    input(Node).
+
+input(Node) ->
+    Env = #env{ cursor_y = 0},
     Capture = capture(Node),
-    plot(Capture).
+    plot(Capture, Env),
+    input(Node, Capture, Env).
+
+input(Node, Capture, Env) ->
+    {CaptureNew, EnvNew} =
+    case [cecho:getch()] of
+        " " ->
+            {capture_and_plot(Node, Env), Env};
+         "f" ->
+            EnvDown = Env#env{ cursor_y = Env#env.cursor_y + 1 },
+            plot(Capture, EnvDown),
+            {Capture, EnvDown};
+         "r" ->
+            EnvDown = Env#env{ cursor_y = Env#env.cursor_y - 1 },
+            plot(Capture, EnvDown),
+            {Capture, EnvDown};
+        _ ->
+            {Capture, Env}
+    end,
+    input(Node, CaptureNew, EnvNew).
 
 setup() ->
     ok = application:start(cecho),
@@ -24,8 +52,16 @@ setup() ->
     cecho:start_color(),
     cecho:curs_set(?ceCURS_INVISIBLE),
     cecho:init_pair(?WHITE, ?ceCOLOR_WHITE, ?ceCOLOR_BLACK),
+    cecho:init_pair(?WHITE_HL, ?ceCOLOR_WHITE, ?ceCOLOR_BLUE),
     cecho:init_pair(?YELLOW, ?ceCOLOR_YELLOW, ?ceCOLOR_BLACK),
-    cecho:init_pair(?RED, ?ceCOLOR_RED, ?ceCOLOR_BLACK).
+    cecho:init_pair(?YELLOW_HL, ?ceCOLOR_YELLOW, ?ceCOLOR_BLUE),
+    cecho:init_pair(?RED, ?ceCOLOR_RED, ?ceCOLOR_BLACK),
+    cecho:init_pair(?RED_HL, ?ceCOLOR_RED, ?ceCOLOR_BLUE).
+
+capture_and_plot(Node, Env) ->
+    Capture = capture(Node),
+    plot(Capture, Env),
+    Capture.
 
 %%%%%%%%%%%%%%%%%%%%%%% capturing data
 
@@ -106,10 +142,12 @@ proc_info_collect(Node = #node{ proc_info = Ref, children = Children }) ->
 
 %%%%%%%%%%%%%%%%%%%%%%% plotting
 
-plot(Capture) ->
-    plot(Capture, #env{}).
+plot(Capture, Env) ->
+    cecho:erase(),
+    do_plot(Capture, Env),
+    cecho:refresh().
 
-plot(#capture{ tree = Tree, time = Time }, Env) ->
+do_plot(#capture{ tree = Tree, time = Time }, Env) ->
     ReductionSum = reductions_sum(Tree),
     EnvNew = Env#env{
      total_reductions = ReductionSum,
@@ -118,9 +156,8 @@ plot(#capture{ tree = Tree, time = Time }, Env) ->
     },
     f(0, 0, "limits ~p", [cecho:getmaxyx()]),
     f(0, 0, "captured at ~p UTC", [calendar:now_to_universal_time(Time)]),
-    f(0, 1, "total reductions: ~p", [ReductionSum]),
+    f(0, 1, "total reductions/s: ~p", [ReductionSum]),
     plot_table(Tree, EnvNew),
-    cecho:refresh(),
     ok.
 
 reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
@@ -132,7 +169,7 @@ reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
     Increment + lists:sum([reductions_sum(Child) || Child <- Children]).
 
 plot_table(Node, Env) ->
-    print(Node, Env),
+    with_color(fun() -> print(Node, Env) end, Env),
     NewEnv = Env#env{ x = Env#env.x + 2, y = Env#env.y + 1 },
     case is_pool(Node#node.children) of
         true ->
@@ -147,11 +184,23 @@ plot_pool(Members, Env) ->
     Balance    = rank_fraction_half_cdf(Reductions),
     case is_number(Balance) of
         true ->
-            f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.x + 1);
+            with_color(
+                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.x + 1) end,
+                Env
+             );
         false ->
-            f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.x + 1)
+            with_color(
+                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.x + 1) end,
+                Env
+            )
     end.
 
+with_color(Fun, #env{ cursor_y = CursorY, y = CursorY }) ->
+    color(?WHITE_HL),
+    Fun(),
+    color(?WHITE);
+with_color(Fun, _) ->
+    Fun().
 
 print(Node = #node{ type = node }, Env) ->
     f(Env#env.x, Env#env.y, "n: ~p", [Node#node.name], Env#env.x,  {Env#env.total_reductions, Env#env.total_reductions});
