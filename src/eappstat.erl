@@ -5,7 +5,7 @@
 
 -record(capture, {tree, time}).
 -record(node, {type, name, proc_info, pid, children = []}).
--record(env, {time, total_reductions, x, y, x_max, y_max, cursor_y}).
+-record(env, {time, total_reductions, x, y, x_max, y_max, cursor_y, toggle_open, open_pids = sets:new()}).
 
 -define(WHITE, 1).
 -define(GREEN, 2).
@@ -30,17 +30,25 @@ input(Node) ->
 input(Node, Capture, Env) ->
     {CaptureNew, EnvNew} =
     case [cecho:getch()] of
-        " " ->
+        [10] ->
+            % capture
             {capture_and_plot(Node, Env), Env};
          "f" ->
+            % down
             EnvDown = Env#env{ cursor_y = Env#env.cursor_y + 1 },
-            plot(Capture, EnvDown),
-            {Capture, EnvDown};
+            EnvPlot = plot(Capture, EnvDown),
+            {Capture, EnvPlot};
          "r" ->
+            % up
             EnvDown = Env#env{ cursor_y = Env#env.cursor_y - 1 },
-            plot(Capture, EnvDown),
-            {Capture, EnvDown};
-        _ ->
+            EnvPlot = plot(Capture, EnvDown),
+            {Capture, EnvPlot};
+         " " ->
+            % we toggle during plotting
+            EnvPlot = plot(Capture, Env#env{ toggle_open = true }),
+            {Capture, EnvPlot};
+        Else ->
+            io:format("~p", Else),
             {Capture, Env}
     end,
     input(Node, CaptureNew, EnvNew).
@@ -144,8 +152,9 @@ proc_info_collect(Node = #node{ proc_info = Ref, children = Children }) ->
 
 plot(Capture, Env) ->
     cecho:erase(),
-    do_plot(Capture, Env),
-    cecho:refresh().
+    Res = do_plot(Capture, Env),
+    cecho:refresh(),
+    Res.
 
 do_plot(#capture{ tree = Tree, time = Time }, Env) ->
     ReductionSum = reductions_sum(Tree),
@@ -157,8 +166,7 @@ do_plot(#capture{ tree = Tree, time = Time }, Env) ->
     f(0, 0, "limits ~p", [cecho:getmaxyx()]),
     f(0, 0, "captured at ~p UTC", [calendar:now_to_universal_time(Time)]),
     f(0, 1, "total reductions/s: ~p", [ReductionSum]),
-    plot_table(Tree, EnvNew),
-    ok.
+    plot_table(Tree, EnvNew).
 
 reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
     Increment =
@@ -170,13 +178,14 @@ reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
 
 plot_table(Node, Env) ->
     with_color(fun() -> print(Node, Env) end, Env),
-    NewEnv = Env#env{ x = Env#env.x + 2, y = Env#env.y + 1 },
+    NewEnv = Env#env{ y = Env#env.y + 1, x = Env#env.x + 1 },
     case is_pool(Node#node.children) of
         true ->
-            plot_pool(Node#node.children, NewEnv),
-            Env#env.y + 2;
+            PoolEnv = plot_pool(Node#node.children, NewEnv#env{ x = NewEnv#env.x }),
+            PoolEnv#env{ x = NewEnv#env.x - 1 };
         false ->
-            lists:foldl(fun(Child, Y) -> plot_table(Child, NewEnv#env{ y = Y }) end, Env#env.y + 1, Node#node.children)
+            ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, FoldEnv) end, NewEnv, Node#node.children),
+            ChildEnv#env{ x = NewEnv#env.x - 1}
     end.
 
 plot_pool(Members, Env) ->
@@ -193,7 +202,8 @@ plot_pool(Members, Env) ->
                 fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.x + 1) end,
                 Env
             )
-    end.
+    end,
+    Env#env{ y = Env#env.y + 1 }.
 
 with_color(Fun, #env{ cursor_y = CursorY, y = CursorY }) ->
     color(?WHITE_HL),
