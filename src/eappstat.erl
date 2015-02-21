@@ -5,7 +5,7 @@
 
 -record(capture, {tree, time}).
 -record(node, {type, name, proc_info, pid, children = []}).
--record(env, {time, total_reductions, x, y, x_max, y_max, cursor_y, toggle_open, open_pids = sets:new()}).
+-record(env, {time, total_reductions, window, x, y, x_max, y_max, cursor_y, toggle_open, current_sup_pid, open_pids}).
 
 -define(WHITE, 1).
 -define(GREEN, 2).
@@ -22,7 +22,7 @@ start(Node) ->
     input(Node).
 
 input(Node) ->
-    Env = #env{ cursor_y = 0},
+    Env = #env{ cursor_y = 0, open_pids = sets:new()},
     Capture = capture(Node),
     plot(Capture, Env),
     input(Node, Capture, Env).
@@ -45,8 +45,9 @@ input(Node, Capture, Env) ->
             {Capture, EnvPlot};
          " " ->
             % we toggle during plotting
-            EnvPlot = plot(Capture, Env#env{ toggle_open = true }),
-            {Capture, EnvPlot};
+            EnvPlot  = plot(Capture, Env#env{ toggle_open = true }),
+            EnvPlot2 = plot(Capture, EnvPlot),
+            {Capture, EnvPlot2#env{ toggle_open = false }};
         Else ->
             io:format("~p", Else),
             {Capture, Env}
@@ -54,6 +55,8 @@ input(Node, Capture, Env) ->
     input(Node, CaptureNew, EnvNew).
 
 setup() ->
+    ok = lager:start(),
+    lager:set_loglevel(lager_console_backend, error),
     ok = application:start(cecho),
     cecho:cbreak(),
     cecho:noecho(),
@@ -74,6 +77,7 @@ capture_and_plot(Node, Env) ->
 %%%%%%%%%%%%%%%%%%%%%%% capturing data
 
 capture(Node) ->
+    lager:info("Capturing from ~p\n", [Node]),
     case net_adm:ping(Node) of
         pang ->
             io:format("can't connect to node, is the node up and are you using the right cookie?\n", []);
@@ -132,8 +136,9 @@ proc_info_async(Node, Pid, From, Ref) ->
     ProcInfo2 = rpc:call(Node, erlang, process_info, [Pid]),
     Red2      = proplists:get_value(reductions, ProcInfo2),
     Red1s     = Red2 - Red1,
-    ProcInfo  = [{reductions, Red1s} | proplists:delete(reductions, ProcInfo1)],
-    From ! {proc_info, Ref, ProcInfo}.
+    ProcInfo3 = [{reductions, Red1s} | proplists:delete(reductions, ProcInfo1)],
+    ProcInfo4 = [{pid, Pid} | ProcInfo3],
+    From ! {proc_info, Ref, ProcInfo4}.
 
 proc_info_collect(Node = #node{ proc_info = undefined, children = Children }) ->
     Node#node{ children = [proc_info_collect(Child) || Child <- Children] };
@@ -153,20 +158,29 @@ proc_info_collect(Node = #node{ proc_info = Ref, children = Children }) ->
 plot(Capture, Env) ->
     cecho:erase(),
     Res = do_plot(Capture, Env),
-    cecho:refresh(),
+    %cecho:refresh(),
     Res.
 
 do_plot(#capture{ tree = Tree, time = Time }, Env) ->
+    lager:info("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n", []),
+    {YMax, XMax} = cecho:getmaxyx(),
+    HeaderHeight = 4,
+    Header = cecho:newwin(HeaderHeight, XMax, 0, 0),
+    lager:info("max: ~p\n", [ {YMax, XMax}]),
     ReductionSum = reductions_sum(Tree),
+    f(1, 1, "captured ~p at ~p UTC", [Tree#node.name, calendar:now_to_universal_time(Time)], Header),
+    f(1, 2, "total reductions/s: ~p", [ReductionSum], Header),
+    cecho:box(Header, 1, 1),
+    cecho:wrefresh(Header),
+    Body =  cecho:newwin(YMax - HeaderHeight, XMax, HeaderHeight, 0),
+    cecho:box(Body, 1, 1),
     EnvNew = Env#env{
      total_reductions = ReductionSum,
-     x = 0,
-     y = 2
-    },
-    f(0, 0, "limits ~p", [cecho:getmaxyx()]),
-    f(0, 0, "captured at ~p UTC", [calendar:now_to_universal_time(Time)]),
-    f(0, 1, "total reductions/s: ~p", [ReductionSum]),
-    plot_table(Tree, EnvNew).
+     x = 1,
+     y = 1,
+     window = Body},
+    plot_table(Tree, EnvNew),
+    cecho:wrefresh(Body).
 
 reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
     Increment =
@@ -178,14 +192,18 @@ reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
 
 plot_table(Node, Env) ->
     with_color(fun() -> print(Node, Env) end, Env),
-    NewEnv = Env#env{ y = Env#env.y + 1, x = Env#env.x + 1 },
-    case is_pool(Node#node.children) of
+    NewEnv =
+    case Node#node.type == supervisor of
+        true  -> Env#env{ y = Env#env.y + 1, x = Env#env.x + 1, current_sup_pid = proplists:get_value(pid, Node#node.proc_info) };
+        false -> Env#env{ y = Env#env.y + 1, x = Env#env.x + 1 }
+    end,
+    case is_pool(Node#node.children, NewEnv) of
         true ->
             PoolEnv = plot_pool(Node#node.children, NewEnv#env{ x = NewEnv#env.x }),
-            PoolEnv#env{ x = NewEnv#env.x - 1 };
+            maybe_open(PoolEnv#env{ x = NewEnv#env.x - 1 });
         false ->
             ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, FoldEnv) end, NewEnv, Node#node.children),
-            ChildEnv#env{ x = NewEnv#env.x - 1}
+            maybe_open(ChildEnv#env{ x = NewEnv#env.x - 1})
     end.
 
 plot_pool(Members, Env) ->
@@ -194,16 +212,32 @@ plot_pool(Members, Env) ->
     case is_number(Balance) of
         true ->
             with_color(
-                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.x + 1) end,
+                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.x + 1, Env#env.window) end,
                 Env
              );
         false ->
             with_color(
-                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.x + 1) end,
+                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.x + 1, Env#env.window) end,
                 Env
             )
     end,
-    Env#env{ y = Env#env.y + 1 }.
+    EnvOpen = maybe_open(Env),
+    EnvOpen#env{ y = Env#env.y + 1 }.
+
+maybe_open( Env = #env{ toggle_open = true, cursor_y = CursorY, y = CursorY, current_sup_pid = CurrentSupPid, open_pids = OpenPids } ) ->
+    lager:info("toggle\n"),
+    OpenPidsNew =
+    case sets:is_element(CurrentSupPid, OpenPids) of
+        true ->
+            lager:info("close\n"),
+            sets:del_element(CurrentSupPid, OpenPids);
+        false ->
+            lager:info("open\n"),
+            sets:add_element(CurrentSupPid, OpenPids)
+    end,
+    Env#env{ open_pids = OpenPidsNew };
+maybe_open(Env) ->
+    Env.
 
 with_color(Fun, #env{ cursor_y = CursorY, y = CursorY }) ->
     color(?WHITE_HL),
@@ -213,58 +247,63 @@ with_color(Fun, _) ->
     Fun().
 
 print(Node = #node{ type = node }, Env) ->
-    f(Env#env.x, Env#env.y, "n: ~p", [Node#node.name], Env#env.x,  {Env#env.total_reductions, Env#env.total_reductions});
+    f(Env#env.x, Env#env.y, "n: ~p", [Node#node.name], Env#env.x,  {Env#env.total_reductions, Env#env.total_reductions}, Env#env.window);
 print(Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y, "a: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)});
+    f(Env#env.x, Env#env.y, "a: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.window);
 print(Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y, "s: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)});
+    f(Env#env.x, Env#env.y, "s: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.window);
 print(Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y, "w: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)});
+    f(Env#env.x, Env#env.y, "w: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.window);
 print(_, _) ->
     noop.
 
-is_pool([_]) ->
+is_pool([_], _) ->
     false;
-is_pool(Members) ->
-    AllWorkers = lists:all(fun(M) -> M#node.type == worker end, Members),
-    InitialCalls =
-    [proplists:get_value('$initial_call', proplists:get_value(dictionary, Member#node.proc_info))
-     || Member <- Members],
-    AllSameCalls = length(lists:usort(InitialCalls)) == 1,
-    AllWorkers and AllSameCalls.
+is_pool(Members, #env{ current_sup_pid = CurrentSupPid, open_pids = OpenPids } ) ->
+    case sets:is_element(CurrentSupPid, OpenPids) of
+        true ->
+            false;
+        false ->
+            AllWorkers = lists:all(fun(M) -> M#node.type == worker end, Members),
+            InitialCalls =
+            [proplists:get_value('$initial_call', proplists:get_value(dictionary, Member#node.proc_info))
+             || Member <- Members],
+            AllSameCalls = length(lists:usort(InitialCalls)) == 1,
+            AllWorkers and AllSameCalls
+    end.
 
-f(X, Y, String, Args) ->
-    f(X, Y, String, Args, 0).
+f(X, Y, String, Args, Window) ->
+    f(X, Y, String, Args, 0, Window).
 
-f(X, Y, String, Args, Depth) ->
-    case move_if_ok(Y, X) of
+f(X, Y, String, Args, Depth, Window) ->
+    case move_if_ok(Y, X, Window) of
         ok ->
-            cecho:addstr(io_lib:format(fnorm(String, Args) ++ "\n", []));
+            cecho:waddstr(Window, io_lib:format(fnorm(String, Args) ++ "\n", []));
         not_ok ->
             noop
     end.
 
-f(X, Y, String, Args, Depth, {AppReds, ProcReds}) ->
+f(X, Y, String, Args, Depth, {AppReds, ProcReds}, Window) ->
     Left  = fnorm(String, Args),
     Fract = ProcReds / AppReds,
     Bar   = trunc(Fract * 32),
     Right = ["-" || _ <- lists:seq(1, Bar)] ++ io_lib:format("~.1f%", [Fract * 100]),
-    case move_if_ok(Y, X) of
+    case move_if_ok(Y, X, Window) of
         ok ->
-            cecho:addstr(Left),
-            cecho:move(Y, 50),
+            cecho:waddstr(Window, Left),
+            cecho:wmove(Window, Y, 50),
             load_color(Fract),
-            cecho:addstr(Right),
+            cecho:waddstr(Window, Right),
             color(?WHITE);
         not_ok ->
             noop
     end.
 
-move_if_ok(X, Y) ->
+move_if_ok(X, Y, Window) ->
     {My, _Mx} = cecho:getmaxyx(),
     case Y < My of
         true ->
-            cecho:move(X, Y),
+            cecho:wmove(Window, X, Y),
             ok;
         false ->
             not_ok
