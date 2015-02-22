@@ -5,7 +5,7 @@
 
 -record(capture, {tree, time}).
 -record(node, {type, name, proc_info, pid, children = []}).
--record(env, {time, total_reductions, window, x, y, x_max, y_max, cursor_y, toggle_open, current_sup_pid, open_pids}).
+-record(env, {time, total_reductions, header, body, x, y, x_max, y_max, cursor_y, shift_y, toggle_open, current_sup_pid, open_pids, body_height}).
 
 -define(WHITE, 1).
 -define(GREEN, 2).
@@ -18,11 +18,10 @@
 
 
 start(Node) ->
-    setup(),
-    input(Node).
+    Env = setup(),
+    input(Node, Env).
 
-input(Node) ->
-    Env = #env{ cursor_y = 0, open_pids = sets:new()},
+input(Node, Env) ->
     Capture = capture(Node),
     plot(Capture, Env),
     input(Node, Capture, Env).
@@ -67,12 +66,206 @@ setup() ->
     cecho:init_pair(?YELLOW, ?ceCOLOR_YELLOW, ?ceCOLOR_BLACK),
     cecho:init_pair(?YELLOW_HL, ?ceCOLOR_YELLOW, ?ceCOLOR_BLUE),
     cecho:init_pair(?RED, ?ceCOLOR_RED, ?ceCOLOR_BLACK),
-    cecho:init_pair(?RED_HL, ?ceCOLOR_RED, ?ceCOLOR_BLUE).
+    cecho:init_pair(?RED_HL, ?ceCOLOR_RED, ?ceCOLOR_BLUE),
+    {YMax, XMax} = cecho:getmaxyx(),
+    HeaderHeight = 4,
+    Header       = cecho:newwin(HeaderHeight, XMax, 0, 0),
+    BodyHeight   = YMax - HeaderHeight,
+    Body         = cecho:newwin(YMax - HeaderHeight, XMax, HeaderHeight, 0),
+    cecho:keypad(Body, true),
+    cecho:scrollok(Body, true),
+    #env{ cursor_y = 0, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, body_height = BodyHeight}.
 
 capture_and_plot(Node, Env) ->
     Capture = capture(Node),
     plot(Capture, Env),
     Capture.
+
+%%%%%%%%%%%%%%%%%%%%%%% plotting
+
+plot(Capture, Env) ->
+    cecho:erase(),
+    Res = do_plot(Capture, Env),
+    Res.
+
+do_plot(#capture{ tree = Tree, time = Time}, Env = #env{ header = Header, body = Body }) ->
+    ReductionSum = reductions_sum(Tree),
+    f(1, 1, "captured ~p at ~p UTC", [Tree#node.name, calendar:now_to_universal_time(Time)], Header),
+    f(1, 2, "total reductions/s: ~p", [ReductionSum], Header),
+    cecho:box(Header, 1, 1),
+    cecho:wrefresh(Header),
+    cecho:box(Body, 1, 1),
+    EnvNew = Env#env{
+     total_reductions = ReductionSum,
+     x = 1,
+     y = 1
+    },
+    Result = plot_table(Tree, EnvNew),
+    cecho:wrefresh(Body),
+    Result.
+
+reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
+    Increment =
+    case ProcInfo of
+        undefined -> 0;
+        _         -> proplists:get_value(reductions, ProcInfo)
+    end,
+    Increment + lists:sum([reductions_sum(Child) || Child <- Children]).
+
+plot_table(_, Env = #env{ y = BodyHeight, body_height = BodyHeight }) ->
+    Env;
+
+plot_table(Node, Env) ->
+    with_color(fun() -> print(Node, Env) end, Env),
+    NewEnv =
+    case Node#node.type == supervisor of
+        true  -> Env#env{ y = Env#env.y + 1, x = Env#env.x + 1, current_sup_pid = proplists:get_value(pid, Node#node.proc_info) };
+        false -> Env#env{ y = Env#env.y + 1, x = Env#env.x + 1 }
+    end,
+    case is_pool(Node#node.children, NewEnv) of
+        true ->
+            PoolEnv = plot_pool(Node#node.children, NewEnv#env{ x = NewEnv#env.x }),
+            maybe_open(PoolEnv#env{ x = NewEnv#env.x - 1 });
+        false ->
+            ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, FoldEnv) end, NewEnv, Node#node.children),
+            maybe_open(ChildEnv#env{ x = NewEnv#env.x - 1})
+    end.
+
+plot_pool(Members, Env) ->
+    Reductions = [reductions_sum(Member) || Member <- Members],
+    Balance    = rank_fraction_half_cdf(Reductions),
+    case is_number(Balance) of
+        true ->
+            with_color(
+                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.x + 1, Env#env.body) end,
+                Env
+             );
+        false ->
+            with_color(
+                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.x + 1, Env#env.body) end,
+                Env
+            )
+    end,
+    EnvOpen = maybe_open(Env),
+    EnvOpen#env{ y = Env#env.y + 1 }.
+
+maybe_open( Env = #env{ toggle_open = true, cursor_y = CursorY, y = CursorY, current_sup_pid = CurrentSupPid, open_pids = OpenPids } ) ->
+    OpenPidsNew =
+    case sets:is_element(CurrentSupPid, OpenPids) of
+        true ->
+            lager:info("close\n"),
+            sets:del_element(CurrentSupPid, OpenPids);
+        false ->
+            lager:info("open\n"),
+            sets:add_element(CurrentSupPid, OpenPids)
+    end,
+    Env#env{ open_pids = OpenPidsNew };
+maybe_open(Env) ->
+    Env.
+
+with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
+    color(Body, ?WHITE_HL),
+    Fun(),
+    color(Body, ?WHITE);
+with_color(Fun, _) ->
+    Fun().
+
+print(Node = #node{ type = node }, Env) ->
+    f(Env#env.x, Env#env.y, "n: ~p", [Node#node.name], Env#env.x,  {Env#env.total_reductions, Env#env.total_reductions}, Env#env.body);
+print(Node = #node{ type = application }, Env) ->
+    f(Env#env.x, Env#env.y, "a: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
+print(Node = #node{ type = supervisor }, Env) ->
+    f(Env#env.x, Env#env.y, "s: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
+print(Node = #node{ type = worker }, Env) ->
+    f(Env#env.x, Env#env.y, "w: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
+print(_, _) ->
+    noop.
+
+is_pool([_], _) ->
+    false;
+is_pool(Members, #env{ current_sup_pid = CurrentSupPid, open_pids = OpenPids } ) ->
+    case sets:is_element(CurrentSupPid, OpenPids) of
+        true ->
+            false;
+        false ->
+            AllWorkers = lists:all(fun(M) -> M#node.type == worker end, Members),
+            InitialCalls =
+            [proplists:get_value('$initial_call', proplists:get_value(dictionary, Member#node.proc_info))
+             || Member <- Members],
+            AllSameCalls = length(lists:usort(InitialCalls)) == 1,
+            AllWorkers and AllSameCalls
+    end.
+
+f(X, Y, String, Args, Window) ->
+    f(X, Y, String, Args, 0, Window).
+
+f(X, Y, String, Args, Depth, Window) ->
+    case move_if_ok(Y, X, Window) of
+        ok ->
+            cecho:waddstr(Window, io_lib:format(fnorm(String, Args) ++ "\n", []));
+        not_ok ->
+            noop
+    end.
+
+f(X, Y, String, Args, Depth, {AppReds, ProcReds}, Window) ->
+    Left  = fnorm(String, Args),
+    Fract = ProcReds / AppReds,
+    Bar   = trunc(Fract * 32),
+    Right = ["-" || _ <- lists:seq(1, Bar)] ++ io_lib:format("~.1f%", [Fract * 100]),
+    case move_if_ok(Y, X, Window) of
+        ok ->
+            cecho:waddstr(Window, Left),
+            cecho:wmove(Window, Y, 50),
+            load_color(Fract, Window),
+            cecho:waddstr(Window, Right),
+            color(Window, ?WHITE);
+        not_ok ->
+            noop
+    end.
+
+move_if_ok(X, Y, Window) ->
+    {My, _Mx} = cecho:getmaxyx(),
+    case Y < My of
+        true ->
+            cecho:wmove(Window, X, Y),
+            ok;
+        false ->
+            not_ok
+    end.
+
+fnorm(String, Args) ->
+    binary_to_list(iolist_to_binary(io_lib:format(String, Args))).
+
+rank_fraction_half_cdf(Values) ->
+    Sum = lists:sum(Values),
+    case Sum of
+        0 ->
+            "-";
+        _ ->
+            ValuesSort = lists:reverse(lists:sort(Values)),
+            Rank50 = first_exceed(ValuesSort, Sum / 2, 0, 0),
+            Rank50 / length(Values) * 2.0
+    end.
+
+first_exceed([Next | Rest], Threshold, Sum, Rank) ->
+    case Next + Sum >= Threshold of
+        true ->
+            Rank;
+        false ->
+            first_exceed(Rest, Threshold, Next + Sum, Rank + 1)
+    end.
+
+color(Window, Color) ->
+    cecho:attron(Window, ?ceCOLOR_PAIR(Color)).
+
+load_color(Fract, Window) ->
+    Color =
+    case Fract of
+        _ when Fract < 0.333 -> ?WHITE;
+        _ when Fract < 0.666 -> ?YELLOW;
+        _ -> ?RED
+    end,
+    color(Window, Color).
 
 %%%%%%%%%%%%%%%%%%%%%%% capturing data
 
@@ -153,192 +346,3 @@ proc_info_collect(Node = #node{ proc_info = Ref, children = Children }) ->
     end,
     Node#node{ proc_info = ProcInfo, children = [proc_info_collect(Child) || Child <- Children] }.
 
-%%%%%%%%%%%%%%%%%%%%%%% plotting
-
-plot(Capture, Env) ->
-    cecho:erase(),
-    Res = do_plot(Capture, Env),
-    %cecho:refresh(),
-    Res.
-
-do_plot(#capture{ tree = Tree, time = Time }, Env) ->
-    lager:info("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n", []),
-    {YMax, XMax} = cecho:getmaxyx(),
-    HeaderHeight = 4,
-    Header = cecho:newwin(HeaderHeight, XMax, 0, 0),
-    lager:info("max: ~p\n", [ {YMax, XMax}]),
-    ReductionSum = reductions_sum(Tree),
-    f(1, 1, "captured ~p at ~p UTC", [Tree#node.name, calendar:now_to_universal_time(Time)], Header),
-    f(1, 2, "total reductions/s: ~p", [ReductionSum], Header),
-    cecho:box(Header, 1, 1),
-    cecho:wrefresh(Header),
-    Body =  cecho:newwin(YMax - HeaderHeight, XMax, HeaderHeight, 0),
-    cecho:box(Body, 1, 1),
-    EnvNew = Env#env{
-     total_reductions = ReductionSum,
-     x = 1,
-     y = 1,
-     window = Body},
-    plot_table(Tree, EnvNew),
-    cecho:wrefresh(Body).
-
-reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
-    Increment =
-    case ProcInfo of
-        undefined -> 0;
-        _         -> proplists:get_value(reductions, ProcInfo)
-    end,
-    Increment + lists:sum([reductions_sum(Child) || Child <- Children]).
-
-plot_table(Node, Env) ->
-    with_color(fun() -> print(Node, Env) end, Env),
-    NewEnv =
-    case Node#node.type == supervisor of
-        true  -> Env#env{ y = Env#env.y + 1, x = Env#env.x + 1, current_sup_pid = proplists:get_value(pid, Node#node.proc_info) };
-        false -> Env#env{ y = Env#env.y + 1, x = Env#env.x + 1 }
-    end,
-    case is_pool(Node#node.children, NewEnv) of
-        true ->
-            PoolEnv = plot_pool(Node#node.children, NewEnv#env{ x = NewEnv#env.x }),
-            maybe_open(PoolEnv#env{ x = NewEnv#env.x - 1 });
-        false ->
-            ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, FoldEnv) end, NewEnv, Node#node.children),
-            maybe_open(ChildEnv#env{ x = NewEnv#env.x - 1})
-    end.
-
-plot_pool(Members, Env) ->
-    Reductions = [reductions_sum(Member) || Member <- Members],
-    Balance    = rank_fraction_half_cdf(Reductions),
-    case is_number(Balance) of
-        true ->
-            with_color(
-                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.x + 1, Env#env.window) end,
-                Env
-             );
-        false ->
-            with_color(
-                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.x + 1, Env#env.window) end,
-                Env
-            )
-    end,
-    EnvOpen = maybe_open(Env),
-    EnvOpen#env{ y = Env#env.y + 1 }.
-
-maybe_open( Env = #env{ toggle_open = true, cursor_y = CursorY, y = CursorY, current_sup_pid = CurrentSupPid, open_pids = OpenPids } ) ->
-    lager:info("toggle\n"),
-    OpenPidsNew =
-    case sets:is_element(CurrentSupPid, OpenPids) of
-        true ->
-            lager:info("close\n"),
-            sets:del_element(CurrentSupPid, OpenPids);
-        false ->
-            lager:info("open\n"),
-            sets:add_element(CurrentSupPid, OpenPids)
-    end,
-    Env#env{ open_pids = OpenPidsNew };
-maybe_open(Env) ->
-    Env.
-
-with_color(Fun, #env{ cursor_y = CursorY, y = CursorY }) ->
-    color(?WHITE_HL),
-    Fun(),
-    color(?WHITE);
-with_color(Fun, _) ->
-    Fun().
-
-print(Node = #node{ type = node }, Env) ->
-    f(Env#env.x, Env#env.y, "n: ~p", [Node#node.name], Env#env.x,  {Env#env.total_reductions, Env#env.total_reductions}, Env#env.window);
-print(Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y, "a: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.window);
-print(Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y, "s: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.window);
-print(Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y, "w: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.window);
-print(_, _) ->
-    noop.
-
-is_pool([_], _) ->
-    false;
-is_pool(Members, #env{ current_sup_pid = CurrentSupPid, open_pids = OpenPids } ) ->
-    case sets:is_element(CurrentSupPid, OpenPids) of
-        true ->
-            false;
-        false ->
-            AllWorkers = lists:all(fun(M) -> M#node.type == worker end, Members),
-            InitialCalls =
-            [proplists:get_value('$initial_call', proplists:get_value(dictionary, Member#node.proc_info))
-             || Member <- Members],
-            AllSameCalls = length(lists:usort(InitialCalls)) == 1,
-            AllWorkers and AllSameCalls
-    end.
-
-f(X, Y, String, Args, Window) ->
-    f(X, Y, String, Args, 0, Window).
-
-f(X, Y, String, Args, Depth, Window) ->
-    case move_if_ok(Y, X, Window) of
-        ok ->
-            cecho:waddstr(Window, io_lib:format(fnorm(String, Args) ++ "\n", []));
-        not_ok ->
-            noop
-    end.
-
-f(X, Y, String, Args, Depth, {AppReds, ProcReds}, Window) ->
-    Left  = fnorm(String, Args),
-    Fract = ProcReds / AppReds,
-    Bar   = trunc(Fract * 32),
-    Right = ["-" || _ <- lists:seq(1, Bar)] ++ io_lib:format("~.1f%", [Fract * 100]),
-    case move_if_ok(Y, X, Window) of
-        ok ->
-            cecho:waddstr(Window, Left),
-            cecho:wmove(Window, Y, 50),
-            load_color(Fract),
-            cecho:waddstr(Window, Right),
-            color(?WHITE);
-        not_ok ->
-            noop
-    end.
-
-move_if_ok(X, Y, Window) ->
-    {My, _Mx} = cecho:getmaxyx(),
-    case Y < My of
-        true ->
-            cecho:wmove(Window, X, Y),
-            ok;
-        false ->
-            not_ok
-    end.
-
-fnorm(String, Args) ->
-    binary_to_list(iolist_to_binary(io_lib:format(String, Args))).
-
-rank_fraction_half_cdf(Values) ->
-    Sum = lists:sum(Values),
-    case Sum of
-        0 ->
-            "-";
-        _ ->
-            ValuesSort = lists:reverse(lists:sort(Values)),
-            Rank50 = first_exceed(ValuesSort, Sum / 2, 0, 0),
-            Rank50 / length(Values) * 2.0
-    end.
-
-first_exceed([Next | Rest], Threshold, Sum, Rank) ->
-    case Next + Sum >= Threshold of
-        true ->
-            Rank;
-        false ->
-            first_exceed(Rest, Threshold, Next + Sum, Rank + 1)
-    end.
-
-color(Color) ->
-    cecho:attron(?ceCOLOR_PAIR(Color)).
-
-load_color(Fract) ->
-    Color =
-    case Fract of
-        _ when Fract < 0.333 -> ?WHITE;
-        _ when Fract < 0.666 -> ?YELLOW;
-        _ -> ?RED
-    end,
-    color(Color).
