@@ -16,6 +16,7 @@
 -define(YELLOW_HL, 7).
 -define(RED_HL, 8).
 
+-define(HEADERHEIGHT, 4).
 
 start(Node) ->
     Env = setup(),
@@ -23,6 +24,7 @@ start(Node) ->
 
 input(Node, Env) ->
     Capture = capture(Node),
+    cecho:refresh(),
     plot(Capture, Env),
     input(Node, Capture, Env).
 
@@ -36,12 +38,12 @@ input(Node, Capture, Env) ->
             % down
             EnvDown = Env#env{ cursor_y = Env#env.cursor_y + 1 },
             EnvPlot = plot(Capture, EnvDown),
-            {Capture, EnvPlot};
+            {Capture, adjust_shift_y(EnvPlot)};
          "r" ->
             % up
-            EnvDown = Env#env{ cursor_y = Env#env.cursor_y - 1 },
+            EnvDown = Env#env{ cursor_y = max(0, Env#env.cursor_y - 1) },
             EnvPlot = plot(Capture, EnvDown),
-            {Capture, EnvPlot};
+            {Capture, adjust_shift_y(EnvPlot)};
          " " ->
             % we toggle during plotting
             EnvPlot  = plot(Capture, Env#env{ toggle_open = true }),
@@ -52,6 +54,19 @@ input(Node, Capture, Env) ->
             {Capture, Env}
     end,
     input(Node, CaptureNew, EnvNew).
+
+adjust_shift_y(Env = #env{ cursor_y = CursorY, shift_y = ShiftY, body_height = BodyHeight }) ->
+    case CursorY of
+        _ when CursorY == (BodyHeight + ShiftY - 1) ->
+            lager:info("scroll down\n"),
+            Env#env{ shift_y = Env#env.shift_y + 1 };
+        _ when CursorY == (ShiftY - 1) ->
+            lager:info("scroll up\n"),
+            Env#env{ shift_y = Env#env.shift_y - 1 };
+        _ ->
+            Env
+    end.
+
 
 setup() ->
     ok = lager:start(),
@@ -68,10 +83,9 @@ setup() ->
     cecho:init_pair(?RED, ?ceCOLOR_RED, ?ceCOLOR_BLACK),
     cecho:init_pair(?RED_HL, ?ceCOLOR_RED, ?ceCOLOR_BLUE),
     {YMax, XMax} = cecho:getmaxyx(),
-    HeaderHeight = 4,
-    Header       = cecho:newwin(HeaderHeight, XMax, 0, 0),
-    BodyHeight   = YMax - HeaderHeight,
-    Body         = cecho:newwin(YMax - HeaderHeight, XMax, HeaderHeight, 0),
+    Header       = cecho:newwin(?HEADERHEIGHT, XMax, 0, 0),
+    BodyHeight   = YMax - ?HEADERHEIGHT,
+    Body         = cecho:newwin(BodyHeight, XMax, ?HEADERHEIGHT, 0),
     cecho:keypad(Body, true),
     cecho:scrollok(Body, true),
     #env{ cursor_y = 0, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, body_height = BodyHeight}.
@@ -84,6 +98,8 @@ capture_and_plot(Node, Env) ->
 %%%%%%%%%%%%%%%%%%%%%%% plotting
 
 plot(Capture, Env) ->
+    cecho:werase(Env#env.header),
+    cecho:werase(Env#env.body),
     cecho:erase(),
     Res = do_plot(Capture, Env),
     Res.
@@ -112,23 +128,25 @@ reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
     end,
     Increment + lists:sum([reductions_sum(Child) || Child <- Children]).
 
-plot_table(_, Env = #env{ y = BodyHeight, body_height = BodyHeight }) ->
-    Env;
-
-plot_table(Node, Env) ->
-    with_color(fun() -> print(Node, Env) end, Env),
-    NewEnv =
-    case Node#node.type == supervisor of
-        true  -> Env#env{ y = Env#env.y + 1, x = Env#env.x + 1, current_sup_pid = proplists:get_value(pid, Node#node.proc_info) };
-        false -> Env#env{ y = Env#env.y + 1, x = Env#env.x + 1 }
-    end,
-    case is_pool(Node#node.children, NewEnv) of
+plot_table(Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
+    case Y >= (BodyHeight + ShiftY) of
         true ->
-            PoolEnv = plot_pool(Node#node.children, NewEnv#env{ x = NewEnv#env.x }),
-            maybe_open(PoolEnv#env{ x = NewEnv#env.x - 1 });
+            Env;
         false ->
-            ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, FoldEnv) end, NewEnv, Node#node.children),
-            maybe_open(ChildEnv#env{ x = NewEnv#env.x - 1})
+            with_color(fun() -> print(Node, Env) end, Env),
+            NewEnv =
+            case Node#node.type == supervisor of
+                true  -> Env#env{ y = Y + 1, x = Env#env.x + 1, current_sup_pid = proplists:get_value(pid, Node#node.proc_info) };
+                false -> Env#env{ y = Y + 1, x = Env#env.x + 1 }
+            end,
+            case is_pool(Node#node.children, NewEnv) of
+                true ->
+                    PoolEnv = plot_pool(Node#node.children, NewEnv#env{ x = NewEnv#env.x }),
+                    maybe_open(PoolEnv#env{ x = NewEnv#env.x - 1 });
+                false ->
+                    ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, FoldEnv) end, NewEnv, Node#node.children),
+                    maybe_open(ChildEnv#env{ x = NewEnv#env.x - 1})
+            end
     end.
 
 plot_pool(Members, Env) ->
@@ -137,12 +155,12 @@ plot_pool(Members, Env) ->
     case is_number(Balance) of
         true ->
             with_color(
-                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.x + 1, Env#env.body) end,
+                fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.body) end,
                 Env
              );
         false ->
             with_color(
-                fun() -> f(Env#env.x, Env#env.y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.x + 1, Env#env.body) end,
+                fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.body) end,
                 Env
             )
     end,
@@ -171,15 +189,13 @@ with_color(Fun, _) ->
     Fun().
 
 print(Node = #node{ type = node }, Env) ->
-    f(Env#env.x, Env#env.y, "n: ~p", [Node#node.name], Env#env.x,  {Env#env.total_reductions, Env#env.total_reductions}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~p", [Node#node.name], {Env#env.total_reductions, Env#env.total_reductions}, Env#env.body);
 print(Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y, "a: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
 print(Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y, "s: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
 print(Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y, "w: ~p ", [Node#node.name], Env#env.x, {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
-print(_, _) ->
-    noop.
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body).
 
 is_pool([_], _) ->
     false;
@@ -196,10 +212,9 @@ is_pool(Members, #env{ current_sup_pid = CurrentSupPid, open_pids = OpenPids } )
             AllWorkers and AllSameCalls
     end.
 
+f(_, Y, _, _, _) when Y < 1 ->
+    noop;
 f(X, Y, String, Args, Window) ->
-    f(X, Y, String, Args, 0, Window).
-
-f(X, Y, String, Args, Depth, Window) ->
     case move_if_ok(Y, X, Window) of
         ok ->
             cecho:waddstr(Window, io_lib:format(fnorm(String, Args) ++ "\n", []));
@@ -207,7 +222,9 @@ f(X, Y, String, Args, Depth, Window) ->
             noop
     end.
 
-f(X, Y, String, Args, Depth, {AppReds, ProcReds}, Window) ->
+f(_, Y, _, _, _, _) when Y < 1 ->
+    noop;
+f(X, Y, String, Args, {AppReds, ProcReds}, Window) ->
     Left  = fnorm(String, Args),
     Fract = ProcReds / AppReds,
     Bar   = trunc(Fract * 32),
@@ -224,8 +241,8 @@ f(X, Y, String, Args, Depth, {AppReds, ProcReds}, Window) ->
     end.
 
 move_if_ok(X, Y, Window) ->
-    {My, _Mx} = cecho:getmaxyx(),
-    case Y < My of
+    {YMax, _XMax} = cecho:getmaxyx(),
+    case (Y + ?HEADERHEIGHT) < YMax of
         true ->
             cecho:wmove(Window, X, Y),
             ok;
