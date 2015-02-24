@@ -96,16 +96,21 @@ capture_and_plot(Node, Env) ->
 
 %%%%%%%%%%%%%%%%%%%%%%% plotting
 
-plot(Capture, Env) ->
+plot(Capture = #capture{ tree = Tree }, Env) ->
     cecho:werase(Env#env.header),
     cecho:werase(Env#env.body),
     cecho:erase(),
-    Res = do_plot(Capture, Env),
-    Res.
-
-do_plot(Capture = #capture{ tree = Tree }, Env = #env{ body = Body }) ->
     ReductionSum = reductions_sum(Tree),
     plot_header(ReductionSum, Capture, Env),
+    plot_body(ReductionSum, Tree, Env).
+
+plot_header(ReductionSum, #capture{ tree = Tree, time = Time}, #env{ header = Header }) ->
+    f(1, 1, "captured ~p at ~p UTC", [Tree#node.name, calendar:now_to_universal_time(Time)], Header),
+    f(1, 2, "total reductions/s: ~p", [ReductionSum], Header),
+    cecho:box(Header, 1, 1),
+    cecho:wrefresh(Header).
+
+plot_body(ReductionSum, Tree, Env = #env{ body = Body }) ->
     cecho:box(Body, 1, 1),
     EnvNew = Env#env{
      total_reductions = ReductionSum,
@@ -115,12 +120,6 @@ do_plot(Capture = #capture{ tree = Tree }, Env = #env{ body = Body }) ->
     Result = plot_table(Tree, EnvNew),
     cecho:wrefresh(Body),
     Result.
-
-plot_header(ReductionSum, #capture{ tree = Tree, time = Time}, #env{ header = Header }) ->
-    f(1, 1, "captured ~p at ~p UTC", [Tree#node.name, calendar:now_to_universal_time(Time)], Header),
-    f(1, 2, "total reductions/s: ~p", [ReductionSum], Header),
-    cecho:box(Header, 1, 1),
-    cecho:wrefresh(Header).
 
 reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
     Increment =
