@@ -5,7 +5,8 @@
 
 -record(capture, {tree, time}).
 -record(node, {type, name, proc_info, pid, children = []}).
--record(env, {mode, time, total_reductions, header, body, x, y, x_max, y_max, cursor_y, shift_y, toggle_open, current_sup_pid, open_pids, body_height}).
+-record(env, {mode, time, node_stats, header, body, footer, x, y, x_max, y_max, cursor_y, shift_y, marked_node, toggle_open, current_sup_pid, open_pids, body_height}).
+-record(node_stats, {total_reductions}).
 
 -define(WHITE, 1).
 -define(GREEN, 2).
@@ -17,6 +18,7 @@
 -define(RED_HL, 8).
 
 -define(HEADERHEIGHT, 4).
+-define(FOOTERHEIGHT, 4).
 
 start(Node) ->
     Env = setup(),
@@ -24,7 +26,6 @@ start(Node) ->
 
 input(Node, Env) ->
     Capture = capture(Node),
-    cecho:refresh(),
     plot(Capture, Env),
     input(Node, Capture, Env).
 
@@ -83,11 +84,12 @@ setup() ->
     cecho:init_pair(?RED_HL, ?ceCOLOR_RED, ?ceCOLOR_BLUE),
     {YMax, XMax} = cecho:getmaxyx(),
     Header       = cecho:newwin(?HEADERHEIGHT, XMax, 0, 0),
-    BodyHeight   = YMax - ?HEADERHEIGHT,
+    BodyHeight   = YMax - ?HEADERHEIGHT - ?FOOTERHEIGHT,
     Body         = cecho:newwin(BodyHeight, XMax, ?HEADERHEIGHT, 0),
+    Footer       = cecho:newwin(?FOOTERHEIGHT, XMax, ?HEADERHEIGHT + BodyHeight, 0),
     cecho:keypad(Body, true),
     cecho:scrollok(Body, true),
-    #env{ mode = reductions, cursor_y = 0, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, body_height = BodyHeight}.
+    #env{ mode = reductions, cursor_y = 0, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, footer = Footer, body_height = BodyHeight}.
 
 capture_and_plot(Node, Env) ->
     Capture = capture(Node),
@@ -99,35 +101,46 @@ capture_and_plot(Node, Env) ->
 plot(Capture = #capture{ tree = Tree }, Env) ->
     cecho:werase(Env#env.header),
     cecho:werase(Env#env.body),
+    cecho:werase(Env#env.footer),
     cecho:erase(),
-    ReductionSum = reductions_sum(Tree),
-    plot_header(ReductionSum, Capture, Env),
-    plot_body(ReductionSum, Tree, Env).
+    EnvReds = Env#env{ node_stats = node_stats(Tree) },
+    plot_header(Capture, EnvReds),
+    EnvPlot = plot_body(Tree, EnvReds),
+    plot_footer(EnvPlot),
+    EnvPlot.
 
-plot_header(ReductionSum, #capture{ tree = Tree, time = Time}, #env{ header = Header }) ->
-    f(1, 1, "captured ~p at ~p UTC", [Tree#node.name, calendar:now_to_universal_time(Time)], Header),
-    f(1, 2, "total reductions/s: ~p", [ReductionSum], Header),
-    cecho:box(Header, 1, 1),
+plot_header(#capture{ tree = Tree, time = Time }, #env{ header = Header, node_stats = #node_stats{ total_reductions = TotalReductions } }) ->
+    {{Y, M, D}, {Hr, Min, Sec}} = calendar:now_to_universal_time(Time),
+    f(1, 1, "~s@~p-~p-~pT~p:~p:~p", [Tree#node.name, Y, M, D, Hr, Min, Sec], Header),
+    f(1, 2, "total reductions/s: ~p", [TotalReductions], Header),
+    {_, XMax} = cecho:getmaxyx(),
+    HLine = ["." || _ <- lists:seq(1, XMax)],
+    f(1, 3, HLine, [], Header),
     cecho:wrefresh(Header).
 
-plot_body(ReductionSum, Tree, Env = #env{ body = Body }) ->
-    cecho:box(Body, 1, 1),
-    EnvNew = Env#env{
-     total_reductions = ReductionSum,
-     x = 1,
-     y = 1
-    },
-    Result = plot_table(Tree, EnvNew),
+plot_body(Tree, Env = #env{ body = Body } ) ->
+    Result = plot_table(Tree, Env#env{ x = 1, y = 1 }),
     cecho:wrefresh(Body),
     Result.
 
-reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
+plot_footer(#env{ marked_node = undefined }) ->
+    noop;
+plot_footer(#env{ footer = Footer, marked_node = Node }) ->
+    f(1, 1, "hello footer: ~p/~p", [Node#node.name, Node#node.pid], Footer),
+    cecho:wrefresh(Footer).
+
+node_stats(Tree) ->
+    #node_stats{
+      total_reductions = total_reductions(Tree)
+    }.
+
+total_reductions(#node{ proc_info = ProcInfo, children = Children }) ->
     Increment =
     case ProcInfo of
         undefined -> 0;
         _         -> proplists:get_value(reductions, ProcInfo)
     end,
-    Increment + lists:sum([reductions_sum(Child) || Child <- Children]).
+    Increment + lists:sum([total_reductions(Child) || Child <- Children]).
 
 plot_table(Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
     case Y >= (BodyHeight + ShiftY) of
@@ -136,7 +149,8 @@ plot_table(Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = B
         false ->
             EnvCurrentSupPid = Env#env{ current_sup_pid = proplists:get_value(pid, Node#node.proc_info) },
             with_color(fun() -> print(Node, EnvCurrentSupPid) end, EnvCurrentSupPid),
-            NewEnv =  EnvCurrentSupPid#env{ y = Y + 1, x = EnvCurrentSupPid#env.x + 1 },
+            MarkedEnv = maybe_mark(Node, EnvCurrentSupPid),
+            NewEnv = MarkedEnv#env{ y = Y + 1, x = EnvCurrentSupPid#env.x + 1 },
             case is_pool(Node#node.children, NewEnv) of
                 true ->
                     PoolEnv = plot_pool(Node#node.children, maybe_open(NewEnv#env{ x = NewEnv#env.x })),
@@ -150,12 +164,13 @@ plot_table(Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = B
 
 
 plot_table(Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
+    MarkedEnv = maybe_mark(Node, Env),
     case Y >= (BodyHeight + ShiftY) of
         true ->
-            Env;
+            MarkedEnv;
         false ->
-            with_color(fun() -> print(Node, Env) end, Env),
-            NewEnv =  Env#env{ y = Y + 1, x = Env#env.x + 1 },
+            with_color(fun() -> print(Node, MarkedEnv) end, MarkedEnv),
+            NewEnv =  MarkedEnv#env{ y = Y + 1, x = MarkedEnv#env.x + 1 },
             ChildEnv = lists:foldl(fun(Child, FoldEnv) -> maybe_open(plot_table(Child, FoldEnv)) end, NewEnv, Node#node.children),
             ChildEnv#env{ x = NewEnv#env.x - 1}
     end.
@@ -163,7 +178,7 @@ plot_table(Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }
 
 
 plot_pool(Members, Env) ->
-    Reductions = [reductions_sum(Member) || Member <- Members],
+    Reductions = [total_reductions(Member) || Member <- Members],
     Balance    = rank_fraction_half_cdf(Reductions),
     case is_number(Balance) of
         true ->
@@ -194,6 +209,14 @@ maybe_open( Env = #env{ toggle_open = true, cursor_y = CursorY, y = CursorY, cur
 maybe_open(Env) ->
     Env.
 
+maybe_mark(Node, Env = #env{ cursor_y = CursorY, y = CursorY }) ->
+    lager:info("mark"),
+    Env#env{ marked_node = Node };
+maybe_mark(_, Env = #env{ cursor_y = CursorY, y = Y }) ->
+    lager:info("~p/~p", [Y, CursorY]),
+    Env.
+
+
 with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body, current_sup_pid = CurrentSupPid }) ->
     color(Body, ?WHITE_HL),
     lager:info("CurrentSupPid:~p\n", [CurrentSupPid]),
@@ -203,13 +226,13 @@ with_color(Fun, _) ->
     Fun().
 
 print(Node = #node{ type = node }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~p ", [Node#node.name], {Env#env.total_reductions, Env#env.total_reductions}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~p ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, Env#env.node_stats#node_stats.total_reductions}, Env#env.body);
 print(Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~p ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
 print(Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~p ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
 print(Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body).
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~p ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body).
 
 is_pool([_], _) ->
     false;
@@ -228,7 +251,7 @@ is_pool(Members, #env{ current_sup_pid = CurrentSupPid, open_pids = OpenPids } )
 
 sort_by_reductions(Nodes) ->
     lists:sort(
-        fun(A, B) -> reductions_sum(A) > reductions_sum(B) end,
+        fun(A, B) -> total_reductions(A) > total_reductions(B) end,
         Nodes
      ).
 
