@@ -5,7 +5,7 @@
 
 -record(capture, {tree, time}).
 -record(node, {type, name, proc_info, pid, children = []}).
--record(env, {time, total_reductions, header, body, x, y, x_max, y_max, cursor_y, shift_y, toggle_open, current_sup_pid, open_pids, body_height}).
+-record(env, {mode, time, total_reductions, header, body, x, y, x_max, y_max, cursor_y, shift_y, toggle_open, current_sup_pid, open_pids, body_height}).
 
 -define(WHITE, 1).
 -define(GREEN, 2).
@@ -34,12 +34,12 @@ input(Node, Capture, Env) ->
         [10] ->
             % capture
             {capture_and_plot(Node, Env), Env};
-         "f" ->
+         [66] ->
             % down
             EnvDown = Env#env{ cursor_y = Env#env.cursor_y + 1 },
             EnvPlot = plot(Capture, EnvDown),
             {Capture, adjust_shift_y(EnvPlot)};
-         "r" ->
+         [65] ->
             % up
             EnvUp = Env#env{ cursor_y = max(1, Env#env.cursor_y - 1) },
             EnvPlot = plot(Capture, adjust_shift_y(EnvUp)),
@@ -49,8 +49,7 @@ input(Node, Capture, Env) ->
             EnvPlot  = plot(Capture, Env#env{ toggle_open = true }),
             EnvPlot2 = plot(Capture, EnvPlot),
             {Capture, EnvPlot2#env{ toggle_open = false }};
-        Else ->
-            io:format("~p", Else),
+        _Else ->
             {Capture, Env}
     end,
     input(Node, CaptureNew, EnvNew).
@@ -88,7 +87,7 @@ setup() ->
     Body         = cecho:newwin(BodyHeight, XMax, ?HEADERHEIGHT, 0),
     cecho:keypad(Body, true),
     cecho:scrollok(Body, true),
-    #env{ cursor_y = 0, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, body_height = BodyHeight}.
+    #env{ mode = reductions, cursor_y = 0, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, body_height = BodyHeight}.
 
 capture_and_plot(Node, Env) ->
     Capture = capture(Node),
@@ -141,7 +140,8 @@ plot_table(Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = B
                     PoolEnv = plot_pool(Node#node.children, maybe_open(NewEnv#env{ x = NewEnv#env.x })),
                     PoolEnv#env{ x = NewEnv#env.x - 1 };
                 false ->
-                    ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, maybe_open(FoldEnv)) end, NewEnv, Node#node.children),
+                    Children = sort_by_reductions(Node#node.children),
+                    ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, maybe_open(FoldEnv)) end, NewEnv, Children),
                     ChildEnv#env{ x = NewEnv#env.x - 1}
             end
     end;
@@ -190,7 +190,6 @@ maybe_open( Env = #env{ toggle_open = true, cursor_y = CursorY, y = CursorY, cur
     lager:info("OpenPids: ~p\n", [sets:to_list(OpenPidsNew)]),
     Env#env{ open_pids = OpenPidsNew, toggle_open = false };
 maybe_open(Env) ->
-    lager:info("Y: ~p Cursor: ~p\n", [Env#env.y, Env#env.cursor_y]),
     Env.
 
 with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body, current_sup_pid = CurrentSupPid }) ->
@@ -202,11 +201,11 @@ with_color(Fun, _) ->
     Fun().
 
 print(Node = #node{ type = node }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~p", [Node#node.name], {Env#env.total_reductions, Env#env.total_reductions}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~p ", [Node#node.name], {Env#env.total_reductions, Env#env.total_reductions}, Env#env.body);
 print(Node = #node{ type = application }, Env) ->
     f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
 print(Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~p (~p)", [Node#node.name, proplists:get_value(pid, Node#node.proc_info)], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
 print(Node = #node{ type = worker }, Env) ->
     f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body).
 
@@ -225,6 +224,12 @@ is_pool(Members, #env{ current_sup_pid = CurrentSupPid, open_pids = OpenPids } )
             AllWorkers and AllSameCalls
     end.
 
+sort_by_reductions(Nodes) ->
+    lists:sort(
+        fun(A, B) -> reductions_sum(A) > reductions_sum(B) end,
+        Nodes
+     ).
+
 f(_, Y, _, _, _) when Y < 1 ->
     noop;
 f(X, Y, String, Args, Window) ->
@@ -240,8 +245,9 @@ f(_, Y, _, _, _, _) when Y < 1 ->
 f(X, Y, String, Args, {AppReds, ProcReds}, Window) ->
     Left  = fnorm(String, Args),
     Fract = ProcReds / AppReds,
-    Bar   = trunc(Fract * 32),
-    Right = ["-" || _ <- lists:seq(1, Bar)] ++ io_lib:format("~.1f%", [Fract * 100]),
+    {_, XMax} = cecho:getmaxyx(Window),
+    Bar   = trunc(Fract * (XMax - 57)),
+    Right = ["|" || _ <- lists:seq(1, Bar)] ++ io_lib:format("~.1f%", [Fract * 100]),
     case move_if_ok(Y, X, Window) of
         ok ->
             cecho:waddstr(Window, Left),
@@ -286,7 +292,13 @@ first_exceed([Next | Rest], Threshold, Sum, Rank) ->
     end.
 
 color(Window, Color) ->
-    cecho:attron(Window, ?ceCOLOR_PAIR(Color)).
+    color(Window, Color, false).
+
+color(Window, Color, false) ->
+    cecho:attron(Window, ?ceA_NORMAL bor ?ceCOLOR_PAIR(Color));
+color(Window, Color, true) ->
+    cecho:attron(Window, ?ceA_BOLD bor ?ceCOLOR_PAIR(Color)).
+
 
 load_color(Fract, Window) ->
     Color =
