@@ -41,9 +41,9 @@ input(Node, Capture, Env) ->
             {Capture, adjust_shift_y(EnvPlot)};
          "r" ->
             % up
-            EnvDown = Env#env{ cursor_y = max(0, Env#env.cursor_y - 1) },
-            EnvPlot = plot(Capture, EnvDown),
-            {Capture, adjust_shift_y(EnvPlot)};
+            EnvUp = Env#env{ cursor_y = max(1, Env#env.cursor_y - 1) },
+            EnvPlot = plot(Capture, adjust_shift_y(EnvUp)),
+            {Capture, EnvPlot};
          " " ->
             % we toggle during plotting
             EnvPlot  = plot(Capture, Env#env{ toggle_open = true }),
@@ -60,7 +60,7 @@ adjust_shift_y(Env = #env{ cursor_y = CursorY, shift_y = ShiftY, body_height = B
         _ when CursorY == (BodyHeight + ShiftY - 1) ->
             lager:info("scroll down\n"),
             Env#env{ shift_y = Env#env.shift_y + 1 };
-        _ when CursorY == (ShiftY - 1) ->
+        _ when CursorY == (ShiftY) ->
             lager:info("scroll up\n"),
             Env#env{ shift_y = Env#env.shift_y - 1 };
         _ ->
@@ -128,26 +128,37 @@ reductions_sum(#node{ proc_info = ProcInfo, children = Children }) ->
     end,
     Increment + lists:sum([reductions_sum(Child) || Child <- Children]).
 
+plot_table(Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
+    case Y >= (BodyHeight + ShiftY) of
+        true ->
+            Env;
+        false ->
+            EnvCurrentSupPid = Env#env{ current_sup_pid = proplists:get_value(pid, Node#node.proc_info) },
+            with_color(fun() -> print(Node, EnvCurrentSupPid) end, EnvCurrentSupPid),
+            NewEnv =  EnvCurrentSupPid#env{ y = Y + 1, x = EnvCurrentSupPid#env.x + 1 },
+            case is_pool(Node#node.children, NewEnv) of
+                true ->
+                    PoolEnv = plot_pool(Node#node.children, maybe_open(NewEnv#env{ x = NewEnv#env.x })),
+                    PoolEnv#env{ x = NewEnv#env.x - 1 };
+                false ->
+                    ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, maybe_open(FoldEnv)) end, NewEnv, Node#node.children),
+                    ChildEnv#env{ x = NewEnv#env.x - 1}
+            end
+    end;
+
+
 plot_table(Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
     case Y >= (BodyHeight + ShiftY) of
         true ->
             Env;
         false ->
             with_color(fun() -> print(Node, Env) end, Env),
-            NewEnv =
-            case Node#node.type == supervisor of
-                true  -> Env#env{ y = Y + 1, x = Env#env.x + 1, current_sup_pid = proplists:get_value(pid, Node#node.proc_info) };
-                false -> Env#env{ y = Y + 1, x = Env#env.x + 1 }
-            end,
-            case is_pool(Node#node.children, NewEnv) of
-                true ->
-                    PoolEnv = plot_pool(Node#node.children, NewEnv#env{ x = NewEnv#env.x }),
-                    maybe_open(PoolEnv#env{ x = NewEnv#env.x - 1 });
-                false ->
-                    ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, FoldEnv) end, NewEnv, Node#node.children),
-                    maybe_open(ChildEnv#env{ x = NewEnv#env.x - 1})
-            end
+            NewEnv =  Env#env{ y = Y + 1, x = Env#env.x + 1 },
+            ChildEnv = lists:foldl(fun(Child, FoldEnv) -> maybe_open(plot_table(Child, FoldEnv)) end, NewEnv, Node#node.children),
+            ChildEnv#env{ x = NewEnv#env.x - 1}
     end.
+
+
 
 plot_pool(Members, Env) ->
     Reductions = [reductions_sum(Member) || Member <- Members],
@@ -164,25 +175,27 @@ plot_pool(Members, Env) ->
                 Env
             )
     end,
-    EnvOpen = maybe_open(Env),
-    EnvOpen#env{ y = Env#env.y + 1 }.
+    Env#env{ y = Env#env.y + 1 }.
 
 maybe_open( Env = #env{ toggle_open = true, cursor_y = CursorY, y = CursorY, current_sup_pid = CurrentSupPid, open_pids = OpenPids } ) ->
     OpenPidsNew =
     case sets:is_element(CurrentSupPid, OpenPids) of
         true ->
-            lager:info("close\n"),
+            lager:info("close ~p\n", [CurrentSupPid]),
             sets:del_element(CurrentSupPid, OpenPids);
         false ->
-            lager:info("open\n"),
+            lager:info("open ~p\n", [CurrentSupPid]),
             sets:add_element(CurrentSupPid, OpenPids)
     end,
-    Env#env{ open_pids = OpenPidsNew };
+    lager:info("OpenPids: ~p\n", [sets:to_list(OpenPidsNew)]),
+    Env#env{ open_pids = OpenPidsNew, toggle_open = false };
 maybe_open(Env) ->
+    lager:info("Y: ~p Cursor: ~p\n", [Env#env.y, Env#env.cursor_y]),
     Env.
 
-with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
+with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body, current_sup_pid = CurrentSupPid }) ->
     color(Body, ?WHITE_HL),
+    lager:info("CurrentSupPid:~p\n", [CurrentSupPid]),
     Fun(),
     color(Body, ?WHITE);
 with_color(Fun, _) ->
@@ -193,7 +206,7 @@ print(Node = #node{ type = node }, Env) ->
 print(Node = #node{ type = application }, Env) ->
     f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
 print(Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~p (~p)", [Node#node.name, proplists:get_value(pid, Node#node.proc_info)], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body);
 print(Node = #node{ type = worker }, Env) ->
     f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~p ", [Node#node.name], {Env#env.total_reductions, reductions_sum(Node)}, Env#env.body).
 
