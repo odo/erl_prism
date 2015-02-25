@@ -55,10 +55,8 @@ input(Node, Capture, Env) ->
 adjust_shift_y(Env = #env{ cursor_y = CursorY, shift_y = ShiftY, body_height = BodyHeight }) ->
     case CursorY of
         _ when CursorY == (BodyHeight + ShiftY - 1) ->
-            lager:info("scroll down\n"),
             Env#env{ shift_y = Env#env.shift_y + 1 };
         _ when CursorY == (ShiftY) ->
-            lager:info("scroll up\n"),
             Env#env{ shift_y = Env#env.shift_y - 1 };
         _ ->
             Env
@@ -202,28 +200,22 @@ maybe_open( Env = #env{ toggle_open = true, cursor_y = CursorY, y = CursorY, cur
     OpenPidsNew =
     case sets:is_element(CurrentSupPid, OpenPids) of
         true ->
-            lager:info("close ~p\n", [CurrentSupPid]),
             sets:del_element(CurrentSupPid, OpenPids);
         false ->
-            lager:info("open ~p\n", [CurrentSupPid]),
             sets:add_element(CurrentSupPid, OpenPids)
     end,
-    lager:info("OpenPids: ~p\n", [sets:to_list(OpenPidsNew)]),
     Env#env{ open_pids = OpenPidsNew, toggle_open = false };
 maybe_open(Env) ->
     Env.
 
 maybe_mark(Node, Env = #env{ cursor_y = CursorY, y = CursorY }) ->
-    lager:info("mark"),
     Env#env{ marked_node = Node };
-maybe_mark(_, Env = #env{ cursor_y = CursorY, y = Y }) ->
-    lager:info("~p/~p", [Y, CursorY]),
+maybe_mark(_, Env) ->
     Env.
 
 
-with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body, current_sup_pid = CurrentSupPid }) ->
+with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
     color(Body, ?WHITE_HL),
-    lager:info("CurrentSupPid:~p\n", [CurrentSupPid]),
     Fun(),
     color(Body, ?WHITE);
 with_color(Fun, _) ->
@@ -236,7 +228,9 @@ print(Node = #node{ type = application }, Env) ->
 print(Node = #node{ type = supervisor }, Env) ->
     f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
 print(Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body).
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
+print(#node{ type = Type }, _) ->
+    lager:info("unkonwn type: ~p\n", [Type]).
 
 is_pool([_], _) ->
     false;
