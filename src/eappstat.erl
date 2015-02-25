@@ -1,12 +1,8 @@
 -module(eappstat).
 -include("cecho.hrl").
+-include("include/eappstat.hrl").
 
--export([start/1, capture_and_plot/2, capture/1, plot/2, proc_info_async/4]).
-
--record(capture, {tree, time}).
--record(node, {type, name, proc_info, pid, children = []}).
--record(env, {mode, time, node_stats, header, body, footer, x, y, x_max, y_max, cursor_y, shift_y, marked_node, toggle_open, current_sup_pid, open_pids, body_height}).
--record(node_stats, {total_reductions}).
+-export([start/1, capture_and_plot/2, plot/2]).
 
 -define(WHITE, 1).
 -define(GREEN, 2).
@@ -19,13 +15,14 @@
 
 -define(HEADERHEIGHT, 4).
 -define(FOOTERHEIGHT, 4).
+-define(INDENT, 2).
 
 start(Node) ->
     Env = setup(),
     input(Node, Env).
 
 input(Node, Env) ->
-    Capture = capture(Node),
+    Capture = eappstat_capture:capture(Node),
     plot(Capture, Env),
     input(Node, Capture, Env).
 
@@ -92,7 +89,7 @@ setup() ->
     #env{ mode = reductions, cursor_y = 0, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, footer = Footer, body_height = BodyHeight}.
 
 capture_and_plot(Node, Env) ->
-    Capture = capture(Node),
+    Capture = eappstat_capture:capture(Node),
     plot(Capture, Env),
     Capture.
 
@@ -125,8 +122,15 @@ plot_body(Tree, Env = #env{ body = Body } ) ->
 
 plot_footer(#env{ marked_node = undefined }) ->
     noop;
-plot_footer(#env{ footer = Footer, marked_node = Node }) ->
-    f(1, 1, "hello footer: ~p/~p", [Node#node.name, Node#node.pid], Footer),
+plot_footer(#env{ footer = Footer, marked_node = Node = #node{ proc_info = undefined } }) ->
+    f(1, 1, "~p", [Node#node.name], Footer);
+plot_footer(#env{ footer = Footer, marked_node = Node = #node{ proc_info = ProcInfo } }) ->
+    Pid               = proplists:get_value(pid, ProcInfo),
+    {Mod, Fun, Arity} = proplists:get_value(current_function, ProcInfo),
+    Status            = proplists:get_value(status, ProcInfo),
+    QueueLength       = proplists:get_value(message_queue_len, ProcInfo),
+    Memory            = proplists:get_value(memory, ProcInfo),
+    f(1, 1, "~s with ~p is ~p at ~p:~p/~p with ~p B and ~p msgs", [Node#node.name, Pid, Status, Mod, Fun, Arity, Memory, QueueLength], Footer),
     cecho:wrefresh(Footer).
 
 node_stats(Tree) ->
@@ -150,15 +154,15 @@ plot_table(Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = B
             EnvCurrentSupPid = Env#env{ current_sup_pid = proplists:get_value(pid, Node#node.proc_info) },
             with_color(fun() -> print(Node, EnvCurrentSupPid) end, EnvCurrentSupPid),
             MarkedEnv = maybe_mark(Node, EnvCurrentSupPid),
-            NewEnv = MarkedEnv#env{ y = Y + 1, x = EnvCurrentSupPid#env.x + 1 },
+            NewEnv = MarkedEnv#env{ y = Y + 1, x = EnvCurrentSupPid#env.x + ?INDENT },
             case is_pool(Node#node.children, NewEnv) of
                 true ->
                     PoolEnv = plot_pool(Node#node.children, maybe_open(NewEnv#env{ x = NewEnv#env.x })),
-                    PoolEnv#env{ x = NewEnv#env.x - 1 };
+                    PoolEnv#env{ x = NewEnv#env.x - ?INDENT };
                 false ->
                     Children = sort_by_reductions(Node#node.children),
                     ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, maybe_open(FoldEnv)) end, NewEnv, Children),
-                    ChildEnv#env{ x = NewEnv#env.x - 1}
+                    ChildEnv#env{ x = NewEnv#env.x - ?INDENT }
             end
     end;
 
@@ -170,9 +174,9 @@ plot_table(Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }
             MarkedEnv;
         false ->
             with_color(fun() -> print(Node, MarkedEnv) end, MarkedEnv),
-            NewEnv =  MarkedEnv#env{ y = Y + 1, x = MarkedEnv#env.x + 1 },
+            NewEnv =  MarkedEnv#env{ y = Y + 1, x = MarkedEnv#env.x + ?INDENT },
             ChildEnv = lists:foldl(fun(Child, FoldEnv) -> maybe_open(plot_table(Child, FoldEnv)) end, NewEnv, Node#node.children),
-            ChildEnv#env{ x = NewEnv#env.x - 1}
+            ChildEnv#env{ x = NewEnv#env.x - ?INDENT}
     end.
 
 
@@ -226,13 +230,13 @@ with_color(Fun, _) ->
     Fun().
 
 print(Node = #node{ type = node }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~p ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, Env#env.node_stats#node_stats.total_reductions}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, Env#env.node_stats#node_stats.total_reductions}, Env#env.body);
 print(Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~p ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
 print(Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~p ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
 print(Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~p ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body).
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body).
 
 is_pool([_], _) ->
     false;
@@ -333,83 +337,4 @@ load_color(Fract, Window) ->
         _ -> ?RED
     end,
     color(Window, Color).
-
-%%%%%%%%%%%%%%%%%%%%%%% capturing data
-
-capture(Node) ->
-    lager:info("Capturing from ~p\n", [Node]),
-    case net_adm:ping(Node) of
-        pang ->
-            io:format("can't connect to node, is the node up and are you using the right cookie?\n", []);
-        pong ->
-            Apps = [App || {App, _, _} <- rpc:call(Node, application, which_applications, [])],
-            Children = [application_proc_info_request(Node, App) || App <- Apps],
-            Skeleton =
-            #node{type = node,
-                  name = Node,
-                  children = lists:filter(fun(E) -> E =/= undefined end, Children)
-            },
-            Tree = proc_info_collect(Skeleton),
-            #capture{ tree = Tree, time = os:timestamp() }
-    end.
-
-application_proc_info_request(Node, App) ->
-    case app_pid(Node, App) of
-        undefined ->
-            undefined;
-        AppPid ->
-            {AppSupPid, _}  = application_master:get_child(AppPid),
-            Children        = [node(Node, Process) || Process <- rpc:call(Node, supervisor, which_children, [AppSupPid])],
-            ChildrenSort    = lists:sort(fun(A, B) -> A#node.name =< B#node.name end, Children),
-            #node{type      = application,
-                  name      = App,
-                  proc_info = proc_info_request(Node, AppPid),
-                  children  = ChildrenSort
-            }
-    end.
-
-app_pid(Node, App) ->
-    proplists:get_value(App, proplists:get_value(running, rpc:call(Node, application_controller, info, []))).
-
-node(Node, {Name, Pid, worker, _Mods}) ->
-    #node{type      = worker,
-          name      = Name,
-          proc_info = proc_info_request(Node, Pid),
-          children  = []
-    };
-node(Node, {Name, Pid, supervisor, _Mods}) ->
-    #node{type      = supervisor,
-          name      = Name,
-          proc_info = proc_info_request(Node, Pid),
-          children  = [node(Node, Process) || Process <- rpc:call(Node, supervisor, which_children, [Pid])]
-    }.
-
-proc_info_request(Node, Pid) when is_pid(Pid) ->
-    Ref = make_ref(),
-    spawn_link(?MODULE, proc_info_async, [Node, Pid, self(), Ref]),
-    Ref.
-
-proc_info_async(Node, Pid, From, Ref) ->
-    ProcInfo1 = rpc:call(Node, erlang, process_info, [Pid]),
-    Red1      = proplists:get_value(reductions, ProcInfo1),
-    timer:sleep(1000),
-    ProcInfo2 = rpc:call(Node, erlang, process_info, [Pid]),
-    Red2      = proplists:get_value(reductions, ProcInfo2),
-    Red1s     = Red2 - Red1,
-    ProcInfo3 = [{reductions, Red1s} | proplists:delete(reductions, ProcInfo1)],
-    ProcInfo4 = [{pid, Pid} | ProcInfo3],
-    From ! {proc_info, Ref, ProcInfo4}.
-
-proc_info_collect(Node = #node{ proc_info = undefined, children = Children }) ->
-    Node#node{ children = [proc_info_collect(Child) || Child <- Children] };
-
-proc_info_collect(Node = #node{ proc_info = Ref, children = Children }) ->
-    ProcInfo =
-    receive
-        {proc_info, Ref, PI} ->
-            PI
-    after 10000 ->
-        throw(timeout)
-    end,
-    Node#node{ proc_info = ProcInfo, children = [proc_info_collect(Child) || Child <- Children] }.
 
