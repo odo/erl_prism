@@ -12,19 +12,32 @@ capture(Node) ->
         pang ->
             lager:info("can't connect to node, is the node up and are you using the right cookie?\n", []);
         pong ->
-            Pids         = rpc:call(Node, erlang, processes, []),
-            ProcInfoRefs = [proc_info_request(Node, Pid) || Pid <- Pids],
-            ProcInfos    = [{Pid, proc_info_collect(Ref)} || {Pid, Ref} <- ProcInfoRefs],
+            Pids             = rpc:call(Node, erlang, processes, []),
+            ProcInfoRefs     = [proc_info_request(Node, Pid) || Pid <- Pids],
+            ProcInfos        = [{Pid, proc_info_collect(Ref)} || {Pid, Ref} <- ProcInfoRefs],
 
-            Apps = [App || {App, _, _} <- rpc:call(Node, application, which_applications, [])],
-            Children = [application_proc_info_request(Node, App, ProcInfos) || App <- Apps],
-            Tree =
-            #node{type = node,
-                  name = Node,
-                  children = lists:filter(fun(E) -> E =/= undefined end, Children)
-            },
-            #capture{ tree = Tree, time = os:timestamp() }
+            Apps             = [App || {App, _, _} <- rpc:call(Node, application, which_applications, [])],
+            NodeChildren     = lists:filter(fun(E) -> E =/= undefined end, [application_proc_info_request(Node, App, ProcInfos) || App <- Apps]),
+            ProcsTree        = collect_pids(#node{type = node, name = Node, children = NodeChildren }),
+            ProcsNonTree     = Pids -- ProcsTree,
+            ProcInfosNonTree = lists:filter(fun(E) -> E =/= undefined end, [proplists:get_value(Pid, ProcInfos) || Pid <- ProcsNonTree]),
+            NodesNonTree     = [#node{ type = process, name = name(undefined, PI), proc_info = PI } || PI <- ProcInfosNonTree],
+            NodesNonTreeSort = lists:sort(
+                                fun(#node{name=undefined}, #node{name=undefined}) -> true; (#node{name=undefined}, _) -> false; (_, #node{name=undefined}) -> true; (A, B) -> A =< B end,
+                                NodesNonTree),
+            NodeChildren2    = NodeChildren ++ NodesNonTreeSort,
+            Tree2            = #node{type = node, name = Node, children = NodeChildren2 },
+            lager:info("ProcsTree:~p ProcsNonTree:~p\n", [length(ProcsTree), length(ProcInfosNonTree)]),
+            #capture{ tree = Tree2, time = os:timestamp() }
     end.
+
+collect_pids(Tree) ->
+    collect_pids(Tree, []).
+collect_pids(#node{ proc_info = undefined, children = Children }, Pids) ->
+    lists:foldl(fun(Child, Ps) -> collect_pids(Child, Ps) end, Pids, Children);
+collect_pids(#node{ proc_info = ProcInfo, children = Children }, Pids) ->
+    Pid = proplists:get_value(pid, ProcInfo),
+    [Pid | lists:foldl(fun(Child, Ps) -> collect_pids(Child, Ps) end, Pids, Children)].
 
 proc_info_collect(Ref) ->
     ProcInfo =
@@ -97,8 +110,13 @@ proc_info_async(Node, Pid, From, Ref) ->
 name(undefined, undefined) ->
     undefined;
 name(undefined, ProcInfo) ->
-    {Mod, Fun, Arity} = proplists:get_value('$initial_call', proplists:get_value(dictionary, ProcInfo)),
-    iolist_to_binary(io_lib:format("~p:~p/~p", [Mod, Fun, Arity]));
+    case proplists:get_value('$initial_call', proplists:get_value(dictionary, ProcInfo)) of
+        {Mod, Fun, Arity} ->
+            iolist_to_binary(io_lib:format("~p:~p/~p", [Mod, Fun, Arity]));
+        undefined ->
+            {Mod, Fun, Arity} = proplists:get_value(current_function, ProcInfo),
+            io_lib:format("~p:~p/~p", [Mod, Fun, Arity])
+    end;
 name(Name, _) ->
     Name.
 

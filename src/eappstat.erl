@@ -229,6 +229,8 @@ print(Node = #node{ type = supervisor }, Env) ->
     f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
 print(Node = #node{ type = worker }, Env) ->
     f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
+print(Node = #node{ type = process }, Env) ->
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
 print(#node{ type = Type }, _) ->
     lager:info("unkonwn type: ~p\n", [Type]).
 
