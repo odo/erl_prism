@@ -110,29 +110,29 @@ plot(Capture = #capture{ tree = Tree }, Env) ->
 
 plot_header(#capture{ tree = Tree, time = Time }, #env{ header = Header, node_stats = #node_stats{ total_reductions = TotalReductions } }) ->
     {{Y, M, D}, {Hr, Min, Sec}} = calendar:now_to_universal_time(Time),
-    f(0, 1, 1, "~s@~p-~p-~pT~p:~p:~p", [Tree#node.name, Y, M, D, Hr, Min, Sec], Header),
-    f(0, 1, 2, "total reductions/s: ~p", [TotalReductions], Header),
+    f(1, 1, "~s@~p-~p-~pT~p:~p:~p", [Tree#node.name, Y, M, D, Hr, Min, Sec], Header),
+    f(1, 2, "total reductions/s: ~p", [TotalReductions], Header),
     {_, XMax} = cecho:getmaxyx(),
     HLine = ["." || _ <- lists:seq(1, XMax)],
-    f(0, 1, 3, HLine, [], Header),
+    f(1, 3, HLine, [], Header),
     cecho:wrefresh(Header).
 
 plot_body(Tree, Env = #env{ body = Body } ) ->
-    Result = plot_table(Tree, Env#env{ x = 1, y = 1 }, 0),
+    Result = plot_table(Tree, Env#env{ x = 1, y = 1 }),
     cecho:wrefresh(Body),
     Result.
 
 plot_footer(#env{ marked_node = undefined }) ->
     noop;
 plot_footer(#env{ footer = Footer, marked_node = Node = #node{ proc_info = undefined } }) ->
-    f(0, 1, 1, "~p", [Node#node.name], Footer);
+    f(1, 1, "~p", [Node#node.name], Footer);
 plot_footer(#env{ footer = Footer, marked_node = Node = #node{ proc_info = ProcInfo } }) ->
     Pid               = proplists:get_value(pid, ProcInfo),
     {Mod, Fun, Arity} = proplists:get_value(current_function, ProcInfo),
     Status            = proplists:get_value(status, ProcInfo),
     QueueLength       = proplists:get_value(message_queue_len, ProcInfo),
     Memory            = proplists:get_value(memory, ProcInfo),
-    f(0, 1, 1, "~s with ~p is ~p at ~p:~p/~p with ~p B and ~p msgs", [Node#node.name, Pid, Status, Mod, Fun, Arity, Memory, QueueLength], Footer),
+    f(1, 1, "~s with ~p is ~p at ~p:~p/~p with ~p B and ~p msgs", [Node#node.name, Pid, Status, Mod, Fun, Arity, Memory, QueueLength], Footer),
     cecho:wrefresh(Footer).
 
 node_stats(Tree) ->
@@ -148,53 +148,53 @@ total_reductions(#node{ proc_info = ProcInfo, children = Children }) ->
     end,
     Increment + lists:sum([total_reductions(Child) || Child <- Children]).
 
-plot_table(Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }, ParentX) ->
+plot_table(Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
     case Y >= (BodyHeight + ShiftY) of
         true ->
             Env;
         false ->
             EnvCurrentSupPid = Env#env{ current_sup_pid = proplists:get_value(pid, Node#node.proc_info) },
-            with_color(fun() -> print(Node, EnvCurrentSupPid, ParentX) end, EnvCurrentSupPid),
+            with_color(fun() -> print(Node, EnvCurrentSupPid) end, EnvCurrentSupPid),
             MarkedEnv = maybe_mark(Node, EnvCurrentSupPid),
             NewEnv = MarkedEnv#env{ y = Y + 1, x = EnvCurrentSupPid#env.x + ?INDENT },
             case is_pool(Node#node.children, NewEnv) of
                 true ->
-                    PoolEnv = plot_pool(Node#node.children, maybe_open(NewEnv#env{ x = NewEnv#env.x }), ParentX + ?INDENT),
+                    PoolEnv = plot_pool(Node#node.children, maybe_open(NewEnv#env{ x = NewEnv#env.x })),
                     PoolEnv#env{ x = NewEnv#env.x - ?INDENT };
                 false ->
                     Children = sort_by_reductions(Node#node.children),
-                    ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, maybe_open(FoldEnv), ParentX + ?INDENT) end, NewEnv, Children),
+                    ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Child, maybe_open(FoldEnv)) end, NewEnv, Children),
                     ChildEnv#env{ x = NewEnv#env.x - ?INDENT }
             end
     end;
 
 
-plot_table(Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }, ParentX) ->
+plot_table(Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
     MarkedEnv = maybe_mark(Node, Env),
     case Y >= (BodyHeight + ShiftY) of
         true ->
             MarkedEnv;
         false ->
-            with_color(fun() -> print(Node, MarkedEnv, ParentX) end, MarkedEnv),
+            with_color(fun() -> print(Node, MarkedEnv) end, MarkedEnv),
             NewEnv =  MarkedEnv#env{ y = Y + 1, x = MarkedEnv#env.x + ?INDENT },
-            ChildEnv = lists:foldl(fun(Child, FoldEnv) -> maybe_open(plot_table(Child, FoldEnv, ParentX + ?INDENT)) end, NewEnv, Node#node.children),
+            ChildEnv = lists:foldl(fun(Child, FoldEnv) -> maybe_open(plot_table(Child, FoldEnv)) end, NewEnv, Node#node.children),
             ChildEnv#env{ x = NewEnv#env.x - ?INDENT}
     end.
 
 
 
-plot_pool(Members, Env, ParentX) ->
+plot_pool(Members, Env) ->
     Reductions = [total_reductions(Member) || Member <- Members],
     Balance    = balance(Reductions),
     case is_number(Balance) of
         true ->
             with_color(
-                fun() -> f(ParentX, Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.body) end,
+                fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.body) end,
                 Env
              );
         false ->
             with_color(
-                fun() -> f(ParentX, Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.body) end,
+                fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.body) end,
                 Env
             )
     end,
@@ -233,17 +233,17 @@ with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
 with_color(Fun, _) ->
     Fun().
 
-print(Node = #node{ type = node }, Env, ParentX) ->
-    f(ParentX, Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, Env#env.node_stats#node_stats.total_reductions}, Env#env.body);
-print(Node = #node{ type = application }, Env, ParentX) ->
-    f(ParentX, Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
-print(Node = #node{ type = supervisor }, Env, ParentX) ->
-    f(ParentX, Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
-print(Node = #node{ type = worker }, Env, ParentX) ->
-    f(ParentX, Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
-print(Node = #node{ type = process }, Env, ParentX) ->
-    f(ParentX, Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
-print(#node{ type = Type }, _, _) ->
+print(Node = #node{ type = node }, Env) ->
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, Env#env.node_stats#node_stats.total_reductions}, Env#env.body);
+print(Node = #node{ type = application }, Env) ->
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
+print(Node = #node{ type = supervisor }, Env) ->
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
+print(Node = #node{ type = worker }, Env) ->
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
+print(Node = #node{ type = process }, Env) ->
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node)}, Env#env.body);
+print(#node{ type = Type }, _) ->
     lager:info("unkonwn type: ~p\n", [Type]).
 
 is_pool([_], _) ->
@@ -267,10 +267,9 @@ sort_by_reductions(Nodes) ->
         Nodes
      ).
 
-f(_, _, Y, _, _, _) when Y < 1 ->
+f(_, Y, _, _, _) when Y < 1 ->
     noop;
-f(ParentX, X, Y, String, Args, Window) ->
-    print_prefix(ParentX, X, Y, Window),
+f(X, Y, String, Args, Window) ->
     case move_if_ok(Y, X, Window) of
         ok ->
             cecho:waddstr(Window, io_lib:format(fnorm(String, Args) ++ "\n", []));
@@ -278,10 +277,9 @@ f(ParentX, X, Y, String, Args, Window) ->
             noop
     end.
 
-f(_, _, Y, _, _, _, _) when Y < 1 ->
+f(_, Y, _, _, _, _) when Y < 1 ->
     noop;
-f(ParentX, X, Y, String, Args, {AppReds, ProcReds}, Window) ->
-    print_prefix(ParentX, X, Y, Window),
+f(X, Y, String, Args, {AppReds, ProcReds}, Window) ->
     Left  = fnorm(String, Args),
     Fract = ProcReds / AppReds,
     {_, XMax} = cecho:getmaxyx(Window),
@@ -307,14 +305,6 @@ move_if_ok(X, Y, Window) ->
         false ->
             not_ok
     end.
-
-print_prefix(ParentX, _, _, _) when ParentX < 1 ->
-    noop;
-print_prefix(ParentX, X, Y, Window) ->
-    move_if_ok(Y, ParentX - 1, Window),
-    Prefix = "|" ++ ["-" || _ <- lists:seq(1, X - ParentX)],
-    cecho:waddstr(Window, Prefix).
-
 
 fnorm(String, Args) ->
     binary_to_list(iolist_to_binary(io_lib:format(String, Args))).
