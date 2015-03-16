@@ -111,13 +111,17 @@ name(undefined, undefined) ->
     undefined;
 name(undefined, ProcInfo) ->
     case proplists:get_value('$initial_call', proplists:get_value(dictionary, ProcInfo)) of
-        {Mod, Fun, Arity} ->
-            iolist_to_binary(io_lib:format("~p:~p/~p", [Mod, Fun, Arity]));
+        {Mod, Fun, _} ->
+            {ModC, FunC, _} = proplists:get_value(current_function, ProcInfo),
+            iolist_to_binary(io_lib:format("~p:~p@~p:~p", [Mod, Fun, ModC, FunC]));
         undefined ->
             {Mod, Fun, Arity} = proplists:get_value(current_function, ProcInfo),
-            io_lib:format("~p:~p/~p", [Mod, Fun, Arity])
+            io_lib:format("@~p:~p/~p", [Mod, Fun, Arity])
     end;
-name(Name, _) ->
-    Name.
+name(Name, undefined) ->
+    Name;
+name(Name, ProcInfo) ->
+    {ModC, FunC, _} = proplists:get_value(current_function, ProcInfo),
+    iolist_to_binary(io_lib:format("~p@~p:~p", [Name, ModC, FunC])).
 
 
