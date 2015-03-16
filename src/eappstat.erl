@@ -4,16 +4,25 @@
 
 -export([start/1, capture_and_plot/2, plot/2]).
 
+-define(BLACK, 0).
 -define(WHITE, 1).
--define(GREEN, 2).
--define(YELLOW, 3).
--define(RED, 4).
--define(WHITE_HL, 5).
--define(GREEN_HL, 6).
--define(YELLOW_HL, 7).
--define(RED_HL, 8).
--define(CURSORCOLOR, 9).
--define(CURSOR_HL, 10).
+-define(RED, 2).
+-define(GREEN, 3).
+-define(BLUE, 4).
+-define(YELLOW, 5).
+
+-define(WHITE_TYPE, 101).
+-define(GREEN_TYPE, 102).
+-define(YELLOW_TYPE, 103).
+-define(RED_TYPE, 104).
+-define(WHITE_HL_TYPE, 105).
+-define(GREEN_HL_TYPE, 106).
+-define(YELLOW_HL_TYPE, 107).
+-define(RED_HL_TYPE, 108).
+-define(BLUE_TYPE, 109).
+-define(BLUE_HL_TYPE, 110).
+-define(CURSORCOLOR, 111).
+-define(CURSOR_HL, 111).
 
 -define(HEADERHEIGHT, 4).
 -define(FOOTERHEIGHT, 4).
@@ -72,15 +81,21 @@ setup() ->
     cecho:cbreak(),
     cecho:noecho(),
     cecho:start_color(),
-    cecho:init_color(?CURSORCOLOR, 200, 200, 800),
+    cecho:init_color(?CURSORCOLOR, 700, 700, 700),
+
+    cecho:init_color(?BLACK, 0, 0, 0),
+    cecho:init_color(?WHITE, 800, 800, 800),
+    cecho:init_color(?RED, 1000, 300, 50),
+    cecho:init_color(?GREEN, 100, 1000, 100),
+    cecho:init_color(?BLUE, 300, 300, 800),
+    cecho:init_color(?YELLOW, 800, 800, 50),
+
     cecho:curs_set(?ceCURS_INVISIBLE),
-    cecho:init_pair(?WHITE, ?ceCOLOR_WHITE, ?ceCOLOR_BLACK),
-    cecho:init_pair(?WHITE_HL, ?ceCOLOR_WHITE, ?ceCOLOR_BLUE),
-    cecho:init_pair(?YELLOW, ?ceCOLOR_YELLOW, ?ceCOLOR_BLACK),
-    cecho:init_pair(?YELLOW_HL, ?ceCOLOR_YELLOW, ?ceCOLOR_BLUE),
-    cecho:init_pair(?RED, ?ceCOLOR_RED, ?ceCOLOR_BLACK),
-    cecho:init_pair(?RED_HL, ?ceCOLOR_RED, ?ceCOLOR_BLUE),
-    cecho:init_pair(?CURSOR_HL, ?CURSORCOLOR, ?ceCOLOR_BLUE),
+    cecho:init_pair(?WHITE_TYPE, ?WHITE, ?BLACK),
+    cecho:init_pair(?YELLOW_TYPE, ?YELLOW, ?BLACK),
+    cecho:init_pair(?BLUE_TYPE, ?BLUE, ?BLACK),
+    cecho:init_pair(?RED_TYPE, ?RED, ?BLACK),
+    cecho:init_pair(?CURSOR_HL, ?BLACK, ?CURSORCOLOR),
     {YMax, XMax} = cecho:getmaxyx(),
     Header       = cecho:newwin(?HEADERHEIGHT, XMax, 0, 0),
     BodyHeight   = YMax - ?HEADERHEIGHT - ?FOOTERHEIGHT,
@@ -229,7 +244,7 @@ maybe_mark(_, Env) ->
 with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
     color(Body, ?CURSOR_HL),
     Fun(),
-    color(Body, ?WHITE);
+    color(Body, ?WHITE_TYPE);
 with_color(Fun, _) ->
     Fun().
 
@@ -291,7 +306,7 @@ f(X, Y, String, Args, {AppReds, ProcReds}, Window) ->
             cecho:wmove(Window, Y, 50),
             load_color(Fract, Window),
             cecho:waddstr(Window, Right),
-            color(Window, ?WHITE);
+            color(Window, ?WHITE_TYPE);
         not_ok ->
             noop
     end.
@@ -321,9 +336,9 @@ color(Window, Color, true) ->
 load_color(Fract, Window) ->
     Color =
     case Fract of
-        _ when Fract < 0.333 -> ?WHITE;
-        _ when Fract < 0.666 -> ?YELLOW;
-        _ -> ?RED
+        _ when Fract < 0.333 -> ?BLUE_TYPE;
+        _ when Fract < 0.666 -> ?YELLOW_TYPE;
+        _ -> ?RED_TYPE
     end,
     color(Window, Color).
 
