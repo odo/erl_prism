@@ -55,6 +55,21 @@ input(Node, Capture, Env) ->
         [10] ->
             % capture
             {capture_and_plot(Node, Env), Env};
+         "r" ->
+            % reductions
+            EnvReds = Env#env{ mode = reductions },
+            EnvPlot = plot(Capture, EnvReds),
+            {Capture, EnvPlot};
+         "m" ->
+            % memory
+            EnvMem  = Env#env{ mode = memory },
+            EnvPlot = plot(Capture, EnvMem),
+            {Capture, EnvPlot};
+         "q" ->
+            % message_queue_len
+            EnvQueue = Env#env{ mode = message_queue_len },
+            EnvPlot  = plot(Capture, EnvQueue),
+            {Capture, EnvPlot};
          [66] ->
             % down
             EnvDown = Env#env{ cursor_y = Env#env.cursor_y + 1 },
@@ -146,7 +161,7 @@ plot(Capture = #capture{ tree = Tree }, Env) ->
     plot_footer(EnvPlot),
     EnvPlot.
 
-plot_header(#capture{ tree = Tree, time = Time }, #env{ header = Header, node_stats = #node_stats{ total_reductions = TotalReductions } }) ->
+plot_header(#capture{ tree = Tree, time = Time }, #env{ header = Header, node_stats = #node_stats{ reductions = TotalReductions } }) ->
     color(Header, ?WHITE_TYPE),
     {{Y, M, D}, {Hr, Min, Sec}} = calendar:now_to_universal_time(Time),
     f(1, 1, "~s@~p-~p-~pT~p:~p:~p", [Tree#node.name, Y, M, D, Hr, Min, Sec], Header),
@@ -178,16 +193,18 @@ plot_footer(#env{ footer = Footer, marked_node = Node = #node{ proc_info = ProcI
 
 node_stats(Tree) ->
     #node_stats{
-      total_reductions = total_reductions(Tree)
+      reductions        = total(reductions, Tree),
+      memory            = total(memory, Tree),
+      message_queue_len = total(message_queue_len, Tree)
     }.
 
-total_reductions(#node{ proc_info = ProcInfo, children = Children }) ->
+total(Type, #node{ proc_info = ProcInfo, children = Children }) ->
     Increment =
     case ProcInfo of
         undefined -> 0;
-        _         -> proplists:get_value(reductions, ProcInfo)
+        _         -> proplists:get_value(Type, ProcInfo)
     end,
-    Increment + lists:sum([total_reductions(Child) || Child <- Children]).
+    Increment + lists:sum([total(Type, Child) || Child <- Children]).
 
 plot_table(Parent, Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
     case Y >= (BodyHeight + ShiftY) of
@@ -225,7 +242,7 @@ plot_table(Parent, Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = 
 
 
 plot_pool(Members, Env) ->
-    Reductions = [total_reductions(Member) || Member <- Members],
+    Reductions = [total(Env#env.mode, Member) || Member <- Members],
     Balance    = balance(Reductions),
     case is_number(Balance) of
         true ->
@@ -282,15 +299,15 @@ with_pool_color(Fun, #env{ body = Body }) ->
     Fun().
 
 print(_, Node = #node{ type = node }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, Env#env.node_stats#node_stats.total_reductions, Env#env.node_stats#node_stats.total_reductions}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), node_stats(Env#env.mode, Env), node_stats(Env#env.mode, Env)}, Env#env.body);
 print(Parent, Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node), total_reductions(Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), total(Env#env.mode, Node), total(Env#env.mode, Parent)}, Env#env.body);
 print(Parent, Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node), total_reductions(Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), total(Env#env.mode, Node), total(Env#env.mode, Parent)}, Env#env.body);
 print(Parent, Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node), total_reductions(Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), total(Env#env.mode, Node), total(Env#env.mode, Parent)}, Env#env.body);
 print(Parent, Node = #node{ type = process }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {Env#env.node_stats#node_stats.total_reductions, total_reductions(Node), total_reductions(Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), total(Env#env.mode, Node), total(Env#env.mode, Parent)}, Env#env.body);
 print(_, #node{ type = Type }, _) ->
     lager:info("unkonwn type: ~p\n", [Type]).
 
@@ -309,9 +326,16 @@ is_pool(Members, #env{ current_sup_pid = CurrentSupPid, open_pids = OpenPids } )
             AllWorkers and AllSameCalls
     end.
 
+node_stats(reductions, Env) ->
+    Env#env.node_stats#node_stats.reductions;
+node_stats(memory, Env) ->
+    Env#env.node_stats#node_stats.memory;
+node_stats(message_queue_len, Env) ->
+    Env#env.node_stats#node_stats.message_queue_len.
+
 sort_by_reductions(Nodes) ->
     lists:sort(
-        fun(A, B) -> total_reductions(A) > total_reductions(B) end,
+        fun(A, B) -> total(reductions, A) > total(reductions, B) end,
         Nodes
      ).
 
