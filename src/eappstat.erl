@@ -4,43 +4,12 @@
 
 -export([start/1, capture_and_plot/2, plot/2]).
 
--define(BLACK, 0).
--define(WHITE, 1).
--define(RED, 2).
--define(GREEN, 3).
--define(BLUE, 4).
--define(YELLOW, 5).
--define(RED_PALE, 6).
--define(YELLOW_PALE, 7).
--define(BLUE_PALE, 8).
--define(DARKGRAY, 9).
-
--define(WHITE_TYPE, 101).
--define(GREEN_TYPE, 102).
--define(YELLOW_TYPE, 103).
--define(RED_TYPE, 104).
--define(WHITE_HL_TYPE, 105).
--define(GREEN_HL_TYPE, 106).
--define(YELLOW_HL_TYPE, 107).
--define(RED_HL_TYPE, 108).
--define(BLUE_TYPE, 109).
--define(BLUE_HL_TYPE, 110).
-
--define(RED_PALE_TYPE, 111).
--define(YELLOW_PALE_TYPE, 112).
--define(BLUE_PALE_TYPE, 113).
-
-
--define(CURSORCOLOR, 114).
--define(CURSOR_HL, 115).
-
--define(POOL_TYPE, 116).
-
--define(HEADERHEIGHT, 4).
+-define(HEADERHEIGHT, 2).
 -define(FOOTERHEIGHT, 4).
 -define(INDENT, 2).
 
 start(Node) ->
+    application:start(eappstat),
     Env = setup(),
     input(Node, Env).
 
@@ -133,6 +102,7 @@ setup() ->
     cecho:init_pair(?RED_PALE_TYPE, ?RED_PALE, ?BLACK),
     cecho:init_pair(?YELLOW_PALE_TYPE, ?YELLOW_PALE, ?BLACK),
     cecho:init_pair(?BLUE_PALE_TYPE, ?BLUE_PALE, ?BLACK),
+    cecho:init_pair(?WHITE_HL_TYPE, ?BLACK, ?WHITE),
     cecho:init_pair(?CURSOR_HL, ?BLACK, ?CURSORCOLOR),
     {YMax, XMax} = cecho:getmaxyx(),
     Header       = cecho:newwin(?HEADERHEIGHT, XMax, 0, 0),
@@ -155,21 +125,16 @@ plot(Capture = #capture{ tree = Tree }, Env) ->
     cecho:werase(Env#env.body),
     cecho:werase(Env#env.footer),
     cecho:erase(),
-    EnvReds = Env#env{ node_stats = node_stats(Tree) },
-    plot_header(Capture, EnvReds),
-    EnvPlot = plot_body(Tree, EnvReds),
+    EnvStats = Env#env{ node_stats = node_stats(Tree) },
+    plot_header(EnvStats, Capture),
+    EnvPlot = plot_body(Tree, EnvStats),
     plot_footer(EnvPlot),
     EnvPlot.
 
-plot_header(#capture{ tree = Tree, time = Time }, #env{ header = Header, node_stats = #node_stats{ reductions = TotalReductions } }) ->
-    color(Header, ?WHITE_TYPE),
-    {{Y, M, D}, {Hr, Min, Sec}} = calendar:now_to_universal_time(Time),
-    f(1, 1, "~s@~p-~p-~pT~p:~p:~p", [Tree#node.name, Y, M, D, Hr, Min, Sec], Header),
-    f(1, 2, "total reductions/s: ~p", [TotalReductions], Header),
-    {_, XMax} = cecho:getmaxyx(),
-    HLine = ["." || _ <- lists:seq(1, XMax)],
-    f(1, 3, HLine, [], Header),
-    cecho:wrefresh(Header).
+plot_header(Env, Capture) ->
+    eappstat_header:set_env(Env),
+    eappstat_header:set_capture(Capture),
+    eappstat_header:plot().
 
 plot_body(Tree, Env = #env{ body = Body } ) ->
     Result = plot_table(undefined, Tree, Env#env{ x = 1, y = 1 }),
@@ -179,10 +144,10 @@ plot_body(Tree, Env = #env{ body = Body } ) ->
 plot_footer(#env{ marked_node = undefined }) ->
     noop;
 plot_footer(#env{ footer = Footer, marked_node = Node = #node{ proc_info = undefined } }) ->
-    color(Footer, ?WHITE_TYPE),
+    eappstat_utils:color(Footer, ?WHITE_TYPE),
     f(1, 1, "~p", [Node#node.name], Footer);
 plot_footer(#env{ footer = Footer, marked_node = Node = #node{ proc_info = ProcInfo } }) ->
-    color(Footer, ?WHITE_TYPE),
+    eappstat_utils:color(Footer, ?WHITE_TYPE),
     Pid               = proplists:get_value(pid, ProcInfo),
     {Mod, Fun, Arity} = proplists:get_value(current_function, ProcInfo),
     Status            = proplists:get_value(status, ProcInfo),
@@ -285,17 +250,17 @@ maybe_mark(_, Env) ->
 
 
 with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
-    color(Body, ?CURSOR_HL),
+    eappstat_utils:color(Body, ?CURSOR_HL),
     Fun();
 with_color(Fun, #env{ body = Body }) ->
-    color(Body, ?WHITE_TYPE),
+    eappstat_utils:color(Body, ?WHITE_TYPE),
     Fun().
 
 with_pool_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
-    color(Body, ?CURSOR_HL),
+    eappstat_utils:color(Body, ?CURSOR_HL),
     Fun();
 with_pool_color(Fun, #env{ body = Body }) ->
-    color(Body, ?POOL_TYPE),
+    eappstat_utils:color(Body, ?POOL_TYPE),
     Fun().
 
 print(_, Node = #node{ type = node }, Env) ->
@@ -344,7 +309,7 @@ f(_, Y, _, _, _) when Y < 1 ->
 f(X, Y, String, Args, Window) ->
     case move_if_ok(Y, X, Window) of
         ok ->
-            cecho:waddstr(Window, io_lib:format(fnorm(String, Args) ++ "\n", []));
+            cecho:waddstr(Window, io_lib:format(eappstat_utils:fnorm(String, Args) ++ "\n", []));
         not_ok ->
             noop
     end.
@@ -353,7 +318,7 @@ f(_, Y, _, _, _, _) when Y < 1 ->
     noop;
 f(X, Y, String, Args, {AppReds, ProcReds, ParentReds}, Window) ->
     {_, XMax}   = cecho:getmaxyx(Window),
-    Left  = fnorm(String, Args),
+    Left  = eappstat_utils:fnorm(String, Args),
     FractTotal  = ProcReds / AppReds,
     {RightParent, FractParent} =
     case ParentReds of
@@ -383,7 +348,7 @@ f(X, Y, String, Args, {AppReds, ProcReds, ParentReds}, Window) ->
             load_color(FractTotal, Window),
             cecho:wmove(Window, Y, 50),
             cecho:waddstr(Window, RightTotal),
-            color(Window, ?WHITE_TYPE);
+            eappstat_utils:color(Window, ?WHITE_TYPE);
         not_ok ->
             noop
     end.
@@ -398,17 +363,6 @@ move_if_ok(X, Y, Window) ->
             not_ok
     end.
 
-fnorm(String, Args) ->
-    binary_to_list(iolist_to_binary(io_lib:format(String, Args))).
-
-color(Window, Color) ->
-    color(Window, Color, false).
-
-color(Window, Color, false) ->
-    cecho:attron(Window, ?ceA_NORMAL bor ?ceCOLOR_PAIR(Color));
-color(Window, Color, true) ->
-    cecho:attron(Window, ?ceA_BOLD bor ?ceCOLOR_PAIR(Color)).
-
 
 load_color(Fract, Window) ->
     Color =
@@ -417,7 +371,7 @@ load_color(Fract, Window) ->
         _ when Fract < 0.50 -> ?YELLOW_TYPE;
         _ -> ?RED_TYPE
     end,
-    color(Window, Color).
+    eappstat_utils:color(Window, Color).
 
 load_color_pale(Fract, Window) ->
     Color =
@@ -426,4 +380,4 @@ load_color_pale(Fract, Window) ->
         _ when Fract < 0.50 -> ?YELLOW_PALE_TYPE;
         _ -> ?RED_PALE_TYPE
     end,
-    color(Window, Color).
+    eappstat_utils:color(Window, Color).
