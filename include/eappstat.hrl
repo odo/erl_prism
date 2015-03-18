@@ -1,4 +1,4 @@
--record(capture, {tree, time}).
+-record(capture, {tree, time, node_stats}).
 -record(node, {type, name, proc_info, children = []}).
 -record(env, {mode, time, node_stats, header, body, footer, x, y, x_max, y_max, cursor_y, shift_y, marked_node, toggle_open, current_sup_pid, open_pids, body_height}).
 -record(node_stats, {reductions, memory, message_queue_len}).

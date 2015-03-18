@@ -5,7 +5,7 @@
 -export([start/1, capture_and_plot/2, plot/2]).
 
 -define(HEADERHEIGHT, 2).
--define(FOOTERHEIGHT, 4).
+-define(FOOTERHEIGHT, 5).
 -define(INDENT, 2).
 
 start(Node) ->
@@ -82,7 +82,7 @@ setup() ->
     cecho:init_color(?BLACK, 0, 0, 0),
     cecho:init_color(?WHITE, 800, 800, 800),
     cecho:init_color(?GREEN, 100, 1000, 100),
-    cecho:init_color(?DARKGRAY, 50, 150, 50),
+    cecho:init_color(?DARKGRAY, 150, 150, 150),
 
     cecho:init_color(?RED, 1000, 300, 50),
     cecho:init_color(?YELLOW, 800, 800, 50),
@@ -120,15 +120,12 @@ capture_and_plot(Node, Env) ->
 
 %%%%%%%%%%%%%%%%%%%%%%% plotting
 
-plot(Capture = #capture{ tree = Tree }, Env) ->
-    cecho:werase(Env#env.header),
+plot(Capture = #capture{ tree = Tree, node_stats = NodeStats }, Env) ->
     cecho:werase(Env#env.body),
-    cecho:werase(Env#env.footer),
-    cecho:erase(),
-    EnvStats = Env#env{ node_stats = node_stats(Tree) },
+    EnvStats = Env#env{ node_stats = NodeStats },
     plot_header(EnvStats, Capture),
     EnvPlot = plot_body(Tree, EnvStats),
-    plot_footer(EnvPlot),
+    plot_footer(),
     EnvPlot.
 
 plot_header(Env, Capture) ->
@@ -136,40 +133,13 @@ plot_header(Env, Capture) ->
     eappstat_header:set_capture(Capture),
     eappstat_header:plot().
 
+plot_footer() ->
+    eappstat_footer:plot().
+
 plot_body(Tree, Env = #env{ body = Body } ) ->
     Result = plot_table(undefined, Tree, Env#env{ x = 1, y = 1 }),
     cecho:wrefresh(Body),
     Result.
-
-plot_footer(#env{ marked_node = undefined }) ->
-    noop;
-plot_footer(#env{ footer = Footer, marked_node = Node = #node{ proc_info = undefined } }) ->
-    eappstat_utils:color(Footer, ?WHITE_TYPE),
-    f(1, 1, "~p", [Node#node.name], Footer);
-plot_footer(#env{ footer = Footer, marked_node = Node = #node{ proc_info = ProcInfo } }) ->
-    eappstat_utils:color(Footer, ?WHITE_TYPE),
-    Pid               = proplists:get_value(pid, ProcInfo),
-    {Mod, Fun, Arity} = proplists:get_value(current_function, ProcInfo),
-    Status            = proplists:get_value(status, ProcInfo),
-    QueueLength       = proplists:get_value(message_queue_len, ProcInfo),
-    Memory            = proplists:get_value(memory, ProcInfo),
-    f(1, 1, "~s with ~p is ~p at ~p:~p/~p with ~p B and ~p msgs", [Node#node.name, Pid, Status, Mod, Fun, Arity, Memory, QueueLength], Footer),
-    cecho:wrefresh(Footer).
-
-node_stats(Tree) ->
-    #node_stats{
-      reductions        = total(reductions, Tree),
-      memory            = total(memory, Tree),
-      message_queue_len = total(message_queue_len, Tree)
-    }.
-
-total(Type, #node{ proc_info = ProcInfo, children = Children }) ->
-    Increment =
-    case ProcInfo of
-        undefined -> 0;
-        _         -> proplists:get_value(Type, ProcInfo)
-    end,
-    Increment + lists:sum([total(Type, Child) || Child <- Children]).
 
 plot_table(Parent, Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
     case Y >= (BodyHeight + ShiftY) of
@@ -177,9 +147,8 @@ plot_table(Parent, Node = #node{ type = supervisor }, Env = #env{ y = Y, body_he
             Env;
         false ->
             EnvCurrentSupPid = Env#env{ current_sup_pid = proplists:get_value(pid, Node#node.proc_info) },
-            with_color(fun() -> print(Parent, Node, EnvCurrentSupPid) end, EnvCurrentSupPid),
-            MarkedEnv = maybe_mark(Node, EnvCurrentSupPid),
-            NewEnv = MarkedEnv#env{ y = Y + 1, x = EnvCurrentSupPid#env.x + ?INDENT },
+            maybe_highlight(fun() -> print(Parent, Node, EnvCurrentSupPid) end, Node, EnvCurrentSupPid),
+            NewEnv = EnvCurrentSupPid#env{ y = Y + 1, x = EnvCurrentSupPid#env.x + ?INDENT },
             case is_pool(Node#node.children, NewEnv) of
                 true ->
                     PoolEnv = plot_pool(Node#node.children, maybe_open(NewEnv#env{ x = NewEnv#env.x })),
@@ -193,13 +162,12 @@ plot_table(Parent, Node = #node{ type = supervisor }, Env = #env{ y = Y, body_he
 
 
 plot_table(Parent, Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
-    MarkedEnv = maybe_mark(Node, Env),
     case Y >= (BodyHeight + ShiftY) of
         true ->
-            MarkedEnv;
+            Env;
         false ->
-            with_color(fun() -> print(Parent, Node, MarkedEnv) end, MarkedEnv),
-            NewEnv =  MarkedEnv#env{ y = Y + 1, x = MarkedEnv#env.x + ?INDENT },
+            maybe_highlight(fun() -> print(Parent, Node, Env) end, Node, Env),
+            NewEnv =  Env#env{ y = Y + 1, x = Env#env.x + ?INDENT },
             ChildEnv = lists:foldl(fun(Child, FoldEnv) -> maybe_open(plot_table(Node, Child, FoldEnv)) end, NewEnv, Node#node.children),
             ChildEnv#env{ x = NewEnv#env.x - ?INDENT}
     end.
@@ -207,29 +175,23 @@ plot_table(Parent, Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = 
 
 
 plot_pool(Members, Env) ->
-    Reductions = [total(Env#env.mode, Member) || Member <- Members],
-    Balance    = balance(Reductions),
+    Values     = [eappstat_utils:total(Env#env.mode, Member) || Member <- Members],
+    Balance    = eappstat_utils:balance(Values),
     case is_number(Balance) of
         true ->
-            with_pool_color(
+            maybe_highlight_pool(
                 fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.body) end,
+                #node{ type = pool, children = Members},
                 Env
              );
         false ->
-            with_pool_color(
+            maybe_highlight_pool(
                 fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.body) end,
+                #node{ type = pool, children = Members},
                 Env
             )
     end,
     Env#env{ y = Env#env.y + 1 }.
-
-balance(Reductions) ->
-    case lists:sum(Reductions) of
-        0 ->
-            "-";
-        _ ->
-            1 - eappstat_gini:index(Reductions)
-    end.
 
 maybe_open( Env = #env{ toggle_open = true, cursor_y = CursorY, y = CursorY, current_sup_pid = CurrentSupPid, open_pids = OpenPids } ) ->
     OpenPidsNew =
@@ -243,36 +205,32 @@ maybe_open( Env = #env{ toggle_open = true, cursor_y = CursorY, y = CursorY, cur
 maybe_open(Env) ->
     Env.
 
-maybe_mark(Node, Env = #env{ cursor_y = CursorY, y = CursorY }) ->
-    Env#env{ marked_node = Node };
-maybe_mark(_, Env) ->
-    Env.
-
-
-with_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
+maybe_highlight(Fun, Node, Env = #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
+    eappstat_footer:set_node(Node, Env),
     eappstat_utils:color(Body, ?CURSOR_HL),
     Fun();
-with_color(Fun, #env{ body = Body }) ->
+maybe_highlight(Fun, _, #env{ body = Body }) ->
     eappstat_utils:color(Body, ?WHITE_TYPE),
     Fun().
 
-with_pool_color(Fun, #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
+maybe_highlight_pool(Fun, Node, Env = #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
+    eappstat_footer:set_node(Node, Env),
     eappstat_utils:color(Body, ?CURSOR_HL),
     Fun();
-with_pool_color(Fun, #env{ body = Body }) ->
+maybe_highlight_pool(Fun, _, #env{ body = Body }) ->
     eappstat_utils:color(Body, ?POOL_TYPE),
     Fun().
 
 print(_, Node = #node{ type = node }, Env) ->
     f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), node_stats(Env#env.mode, Env), node_stats(Env#env.mode, Env)}, Env#env.body);
 print(Parent, Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), total(Env#env.mode, Node), total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
 print(Parent, Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), total(Env#env.mode, Node), total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
 print(Parent, Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), total(Env#env.mode, Node), total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
 print(Parent, Node = #node{ type = process }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), total(Env#env.mode, Node), total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
 print(_, #node{ type = Type }, _) ->
     lager:info("unkonwn type: ~p\n", [Type]).
 
@@ -300,7 +258,7 @@ node_stats(message_queue_len, Env) ->
 
 sort_by_reductions(Nodes) ->
     lists:sort(
-        fun(A, B) -> total(reductions, A) > total(reductions, B) end,
+        fun(A, B) -> eappstat_utils:total(reductions, A) > eappstat_utils:total(reductions, B) end,
         Nodes
      ).
 

@@ -1,7 +1,20 @@
 -module(eappstat_utils).
 -include("cecho.hrl").
+-include("include/eappstat.hrl").
 
 -compile([export_all]).
+
+f(X, Y, String, Args, Window) ->
+    cecho:wmove(Window, Y, X),
+    cecho:waddstr(Window, io_lib:format(eappstat_utils:fnorm(String, Args) ++ "\n", [])).
+
+total(Type, #node{ proc_info = ProcInfo, children = Children }) ->
+    Increment =
+    case ProcInfo of
+        undefined -> 0;
+        _         -> proplists:get_value(Type, ProcInfo)
+    end,
+    Increment + lists:sum([total(Type, Child) || Child <- Children]).
 
 color(Window, Color) ->
     color(Window, Color, false).
@@ -34,3 +47,18 @@ oom(2) -> "M";
 oom(3) -> "G";
 oom(4) -> "T";
 oom(_) -> "XXL".
+
+
+maybe_hl(Mode, Mode, Window) ->
+    color(Window, ?WHITE_HL_TYPE);
+maybe_hl(_, _, Window) ->
+    color(Window, ?WHITE_TYPE).
+
+balance(Reductions) ->
+    case lists:sum(Reductions) of
+        0 ->
+            "-";
+        _ ->
+            1 - eappstat_gini:index(Reductions)
+    end.
+

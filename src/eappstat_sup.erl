@@ -21,16 +21,14 @@ start_link() ->
 
 init([]) ->
     Header = {
-      eappstat_header, {
-        eappstat_header,
-        start_link,
-        []
-       },
-        permanent,
-        2000,
-        worker,
-        [eappstat_header]},
-    {ok, { {one_for_one, 5, 10}, [Header]} }.
+        eappstat_header, { eappstat_header, start_link, [] },
+        permanent, 2000, worker, [eappstat_header]
+     },
+    Footer = {
+        eappstat_footer, { eappstat_footer, start_link, [] },
+        permanent, 2000, worker, [eappstat_footer]
+     },
+    {ok, { {one_for_one, 5, 10}, [Header, Footer]} }.
 
 
 

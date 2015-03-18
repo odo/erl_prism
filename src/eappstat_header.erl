@@ -40,19 +40,20 @@ handle_call({set_capture, Capture}, _From, State) ->
 handle_call({plot}, _From, State) ->
     #capture{ tree = Tree, time = Time } = State#state.capture,
     #env{ header = Header, node_stats = NodeStats, mode = Mode } = State#state.env,
+    cecho:werase(Header),
     eappstat_utils:color(Header, ?WHITE_TYPE),
     {{Y, M, D}, {Hr, Min, Sec}} = calendar:now_to_universal_time(Time),
-    f(1,  0, "~s", [Tree#node.name], Header),
-    f(45, 0, "~p-~p-~pT~p:~p:~p", [Y, M, D, Hr, Min, Sec], Header),
+    eappstat_utils:f(1,  0, "~s", [Tree#node.name], Header),
+    eappstat_utils:f(45, 0, "~p-~p-~pT~p:~p:~p", [Y, M, D, Hr, Min, Sec], Header),
     {RedsValue, RedsOOM} = eappstat_utils:oom(NodeStats#node_stats.reductions, 1000),
-    maybe_hl(Mode, reductions, Header),
-    f(1,  1, "Reductions/s: ~.1f ~s", [RedsValue, RedsOOM], Header),
+    eappstat_utils:maybe_hl(Mode, reductions, Header),
+    eappstat_utils:f(1,  1, "Reductions: ~.1f ~s/s", [RedsValue, RedsOOM], Header),
     {MemValue, MemOOM} = eappstat_utils:oom(NodeStats#node_stats.memory, 1024),
-    maybe_hl(Mode, memory, Header),
-    f(25, 1, "Memory: ~.1f ~sB", [MemValue, MemOOM], Header),
+    eappstat_utils:maybe_hl(Mode, memory, Header),
+    eappstat_utils:f(25, 1, "Memory: ~.1f ~sB", [MemValue, MemOOM], Header),
     {QueueValue, QueueOOM} = eappstat_utils:oom(NodeStats#node_stats.message_queue_len, 1000),
-    maybe_hl(Mode, message_queue_len, Header),
-    f(45, 1, "messageQueue: ~.1f ~s", [QueueValue, QueueOOM], Header),
+    eappstat_utils:maybe_hl(Mode, message_queue_len, Header),
+    eappstat_utils:f(45, 1, "messageQueue: ~.1f ~s", [QueueValue, QueueOOM], Header),
     cecho:wrefresh(Header),
     {reply, ok, State}.
 
@@ -67,13 +68,4 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
-f(X, Y, String, Args, Window) ->
-    cecho:wmove(Window, Y, X),
-    cecho:waddstr(Window, io_lib:format(eappstat_utils:fnorm(String, Args) ++ "\n", [])).
-
-maybe_hl(Mode, Mode, Window) ->
-    eappstat_utils:color(Window, ?WHITE_HL_TYPE);
-maybe_hl(_, _, Window) ->
-    eappstat_utils:color(Window, ?WHITE_TYPE).
 
