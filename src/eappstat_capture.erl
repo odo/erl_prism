@@ -28,7 +28,7 @@ capture(Node) ->
             NodeChildren2    = NodeChildren ++ NodesNonTreeSort,
             Tree2            = #node{type = node, name = Node, children = NodeChildren2 },
             lager:info("ProcsTree:~p ProcsNonTree:~p\n", [length(ProcsTree), length(ProcInfosNonTree)]),
-            #capture{ tree = Tree2, time = os:timestamp(), node_stats = node_stats(Tree2) }
+            #capture{ tree = Tree2, time = os:timestamp(), totals = totals(Tree2) }
     end.
 
 collect_pids(Tree) ->
@@ -124,8 +124,8 @@ name(Name, ProcInfo) ->
     {ModC, FunC, _} = proplists:get_value(current_function, ProcInfo),
     iolist_to_binary(io_lib:format("~p@~p:~p", [Name, ModC, FunC])).
 
-node_stats(Tree) ->
-    #node_stats{
+totals(Tree) ->
+    #totals{
       reductions        = total(reductions, Tree),
       memory            = total(memory, Tree),
       message_queue_len = total(message_queue_len, Tree)

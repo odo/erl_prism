@@ -120,9 +120,9 @@ capture_and_plot(Node, Env) ->
 
 %%%%%%%%%%%%%%%%%%%%%%% plotting
 
-plot(Capture = #capture{ tree = Tree, node_stats = NodeStats }, Env) ->
+plot(Capture = #capture{ tree = Tree, totals = NodeStats }, Env) ->
     cecho:werase(Env#env.body),
-    EnvStats = Env#env{ node_stats = NodeStats },
+    EnvStats = Env#env{ totals = NodeStats },
     plot_header(EnvStats, Capture),
     EnvPlot = plot_body(Tree, EnvStats),
     plot_footer(),
@@ -222,15 +222,15 @@ maybe_highlight_pool(Fun, _, #env{ body = Body }) ->
     Fun().
 
 print(_, Node = #node{ type = node }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), node_stats(Env#env.mode, Env), node_stats(Env#env.mode, Env)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {totals(Env#env.mode, Env), totals(Env#env.mode, Env), totals(Env#env.mode, Env)}, Env#env.body);
 print(Parent, Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
 print(Parent, Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
 print(Parent, Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
 print(Parent, Node = #node{ type = process }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {node_stats(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
 print(_, #node{ type = Type }, _) ->
     lager:info("unkonwn type: ~p\n", [Type]).
 
@@ -249,12 +249,12 @@ is_pool(Members, #env{ current_sup_pid = CurrentSupPid, open_pids = OpenPids } )
             AllWorkers and AllSameCalls
     end.
 
-node_stats(reductions, Env) ->
-    Env#env.node_stats#node_stats.reductions;
-node_stats(memory, Env) ->
-    Env#env.node_stats#node_stats.memory;
-node_stats(message_queue_len, Env) ->
-    Env#env.node_stats#node_stats.message_queue_len.
+totals(reductions, Env) ->
+    Env#env.totals#totals.reductions;
+totals(memory, Env) ->
+    Env#env.totals#totals.memory;
+totals(message_queue_len, Env) ->
+    Env#env.totals#totals.message_queue_len.
 
 sort_by_reductions(Nodes) ->
     lists:sort(
