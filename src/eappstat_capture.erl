@@ -21,15 +21,52 @@ capture(Node) ->
             ProcsTree        = collect_pids(#node{type = node, name = Node, children = NodeChildren }),
             ProcsNonTree     = Pids -- ProcsTree,
             ProcInfosNonTree = lists:filter(fun(E) -> E =/= undefined end, [proplists:get_value(Pid, ProcInfos) || Pid <- ProcsNonTree]),
-            NodesNonTree     = [#node{ type = process, name = name(undefined, PI), proc_info = PI } || PI <- ProcInfosNonTree],
+            NodesNonTree     = [#node{ type = process, totals = #totals{}, name = name(undefined, PI), proc_info = PI } || PI <- ProcInfosNonTree],
             NodesNonTreeSort = lists:sort(
                                 fun(#node{name=undefined}, #node{name=undefined}) -> true; (#node{name=undefined}, _) -> false; (_, #node{name=undefined}) -> true; (A, B) -> A =< B end,
                                 NodesNonTree),
             NodeChildren2    = NodeChildren ++ NodesNonTreeSort,
-            Tree2            = #node{type = node, name = Node, children = NodeChildren2 },
+            Tree1            = #node{type = node, totals = #totals{}, name = Node, children = NodeChildren2 },
+            Tree2            = add_totals(Tree1, reductions),
+            Tree3            = add_totals(Tree2, memory),
+            Tree4            = add_totals(Tree3, message_queue_len),
             lager:info("ProcsTree:~p ProcsNonTree:~p\n", [length(ProcsTree), length(ProcInfosNonTree)]),
-            #capture{ tree = Tree2, time = os:timestamp(), totals = totals(Tree2) }
+            #capture{ tree = Tree4, time = os:timestamp(), totals = Tree4#node.totals }
     end.
+
+add_totals(Node, Type) ->
+    {NewNodes, _} = add_totals2(Node, Type),
+    NewNodes.
+add_totals2(Node, Type) ->
+    Own =
+    case Node#node.proc_info of
+        undefined -> 0;
+        ProcInfo  -> proplists:get_value(Type, ProcInfo)
+    end,
+    NewPairs = [add_totals2(Child, Type) || Child <- Node#node.children],
+    {NewChildren, ChildValues}  = pivot(NewPairs),
+    Values = lists:flatten([Own | ChildValues]),
+    Sum = lists:sum(Values),
+    Totals    = Node#node.totals,
+    NewTotals =
+    case Type of
+        reductions ->
+            Totals#totals{ reductions = Sum };
+        memory ->
+            Totals#totals{ memory = Sum };
+        message_queue_len ->
+            Totals#totals{ message_queue_len = Sum }
+    end,
+    NewNode = Node#node{ totals = NewTotals, children = lists:reverse(NewChildren) },
+    {NewNode, Sum}.
+
+pivot(Pairs) ->
+    pivot(Pairs, {[], []}).
+
+pivot([], Acc) ->
+    Acc;
+pivot([{Child, Value} | Rest], {ChildAcc, ValueAcc}) ->
+    pivot(Rest, {[Child | ChildAcc], [Value | ValueAcc]}).
 
 collect_pids(Tree) ->
     collect_pids(Tree, []).
@@ -61,6 +98,7 @@ application_proc_info_request(Node, App, ProcInfos) ->
             #node{type      = application,
                   name      = App,
                   proc_info = proplists:get_value(AppPid, ProcInfos),
+                  totals    = #totals{},
                   children  = ChildrenSort
             }
     end.
@@ -73,6 +111,7 @@ node(_, {Name, Pid, worker, _Mods}, ProcInfos) ->
     #node{type      = worker,
           name      = name(Name, ProcInfo),
           proc_info = ProcInfo,
+          totals    = #totals{},
           children  = []
     };
 node(Node, {Name, Pid, supervisor, _Mods}, ProcInfos) ->
@@ -80,6 +119,7 @@ node(Node, {Name, Pid, supervisor, _Mods}, ProcInfos) ->
     #node{type      = supervisor,
           name      = name(Name, ProcInfo),
           proc_info = ProcInfo,
+          totals    = #totals{},
           children  = [node(Node, Process, ProcInfos) || Process <- rpc:call(Node, supervisor, which_children, [Pid])]
     }.
 
@@ -123,20 +163,4 @@ name(Name, undefined) ->
 name(Name, ProcInfo) ->
     {ModC, FunC, _} = proplists:get_value(current_function, ProcInfo),
     iolist_to_binary(io_lib:format("~p@~p:~p", [Name, ModC, FunC])).
-
-totals(Tree) ->
-    #totals{
-      reductions        = total(reductions, Tree),
-      memory            = total(memory, Tree),
-      message_queue_len = total(message_queue_len, Tree)
-    }.
-
-total(Type, #node{ proc_info = ProcInfo, children = Children }) ->
-    Increment =
-    case ProcInfo of
-        undefined -> 0;
-        _         -> proplists:get_value(Type, ProcInfo)
-    end,
-    Increment + lists:sum([total(Type, Child) || Child <- Children]).
-
 

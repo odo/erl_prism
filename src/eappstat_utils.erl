@@ -8,13 +8,12 @@ f(X, Y, String, Args, Window) ->
     cecho:wmove(Window, Y, X),
     cecho:waddstr(Window, io_lib:format(eappstat_utils:fnorm(String, Args) ++ "\n", [])).
 
-total(Type, #node{ proc_info = ProcInfo, children = Children }) ->
-    Increment =
-    case ProcInfo of
-        undefined -> 0;
-        _         -> proplists:get_value(Type, ProcInfo)
-    end,
-    Increment + lists:sum([total(Type, Child) || Child <- Children]).
+total(reductions, Node) ->
+    Node#node.totals#totals.reductions;
+total(memory, Node) ->
+    Node#node.totals#totals.memory;
+total(message_queue_len, Node) ->
+    Node#node.totals#totals.message_queue_len.
 
 color(Window, Color) ->
     color(Window, Color, false).

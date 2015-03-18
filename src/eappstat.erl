@@ -102,7 +102,7 @@ setup() ->
     cecho:init_pair(?RED_PALE_TYPE, ?RED_PALE, ?BLACK),
     cecho:init_pair(?YELLOW_PALE_TYPE, ?YELLOW_PALE, ?BLACK),
     cecho:init_pair(?BLUE_PALE_TYPE, ?BLUE_PALE, ?BLACK),
-    cecho:init_pair(?WHITE_HL_TYPE, ?BLACK, ?WHITE),
+    cecho:init_pair(?WHITE_HL_TYPE, ?DARKGRAY, ?WHITE),
     cecho:init_pair(?CURSOR_HL, ?BLACK, ?CURSORCOLOR),
     {YMax, XMax} = cecho:getmaxyx(),
     Header       = cecho:newwin(?HEADERHEIGHT, XMax, 0, 0),
@@ -120,9 +120,9 @@ capture_and_plot(Node, Env) ->
 
 %%%%%%%%%%%%%%%%%%%%%%% plotting
 
-plot(Capture = #capture{ tree = Tree, totals = NodeStats }, Env) ->
+plot(Capture = #capture{ tree = Tree, totals = Totals }, Env) ->
     cecho:werase(Env#env.body),
-    EnvStats = Env#env{ totals = NodeStats },
+    EnvStats = Env#env{ totals = Totals },
     plot_header(EnvStats, Capture),
     EnvPlot = plot_body(Tree, EnvStats),
     plot_footer(),
@@ -175,19 +175,23 @@ plot_table(Parent, Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = 
 
 
 plot_pool(Members, Env) ->
-    Values     = [eappstat_utils:total(Env#env.mode, Member) || Member <- Members],
-    Balance    = eappstat_utils:balance(Values),
+    Values          = [eappstat_utils:total(Env#env.mode, Member) || Member <- Members],
+    Balance         = eappstat_utils:balance(Values),
+    TotalReductions = lists:sum([eappstat_utils:total(reductions, Member) || Member <- Members]),
+    TotalMemory     = lists:sum([eappstat_utils:total(memory, Member) || Member <- Members]),
+    TotalMsg        = lists:sum([eappstat_utils:total(message_queue_len, Member) || Member <- Members]),
+    Totals          = #totals{ reductions = TotalReductions, memory = TotalMemory, message_queue_len = TotalMsg },
     case is_number(Balance) of
         true ->
             maybe_highlight_pool(
                 fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.body) end,
-                #node{ type = pool, children = Members},
+                #node{ type = pool, totals = Totals, children = Members},
                 Env
              );
         false ->
             maybe_highlight_pool(
                 fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.body) end,
-                #node{ type = pool, children = Members},
+                #node{ type = pool, totals = Totals, children = Members},
                 Env
             )
     end,
