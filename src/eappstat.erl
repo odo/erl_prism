@@ -188,13 +188,13 @@ plot_pool(Members, Env) ->
     case is_number(Balance) of
         true ->
             maybe_highlight_pool(
-                fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env#env.body) end,
+                fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env) end,
                 #node{ type = pool, totals = Totals, children = Members},
                 Env
              );
         false ->
             maybe_highlight_pool(
-                fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env#env.body) end,
+                fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env) end,
                 #node{ type = pool, totals = Totals, children = Members},
                 Env
             )
@@ -230,15 +230,15 @@ maybe_highlight_pool(Fun, _, #env{ body = Body }) ->
     Fun().
 
 print(_, Node = #node{ type = node }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {totals(Env#env.mode, Env), totals(Env#env.mode, Env), totals(Env#env.mode, Env)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {totals(Env#env.mode, Env), totals(Env#env.mode, Env), totals(Env#env.mode, Env)}, Env);
 print(Parent, Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env);
 print(Parent, Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env);
 print(Parent, Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env);
 print(Parent, Node = #node{ type = process }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env#env.body);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env);
 print(_, #node{ type = Type }, _) ->
     lager:info("unkonwn type: ~p\n", [Type]).
 
@@ -272,26 +272,37 @@ sort_by_reductions(Nodes) ->
 
 f(_, Y, _, _, _) when Y < 1 ->
     noop;
-f(X, Y, String, Args, Window) ->
-    case move_if_ok(Y, X, Window) of
+f(X, Y, String, Args, Env) ->
+    Body = Env#env.body,
+    case move_if_ok(Y, X, Body) of
         ok ->
-            cecho:waddstr(Window, io_lib:format(eappstat_utils:fnorm(String, Args) ++ "\n", []));
+            cecho:waddstr(Body, io_lib:format(eappstat_utils:fnorm(String, Args) ++ "\n", []));
         not_ok ->
             noop
     end.
 
 f(_, Y, _, _, _, _) when Y < 1 ->
     noop;
-f(X, Y, String, Args, {AppReds, ProcReds, ParentReds}, Window) ->
-    {_, XMax}   = cecho:getmaxyx(Window),
+f(X, Y, String, Args, {0, _, _}, Env) ->
+    Body = Env#env.body,
     Left  = eappstat_utils:fnorm(String, Args),
-    FractTotal  = ProcReds / AppReds,
+    case move_if_ok(Y, X, Body) of
+        ok ->
+            cecho:waddstr(Body, Left);
+        _ ->
+            noop
+    end;
+f(X, Y, String, Args, {AppLoad, ProcLoad, ParentLoad}, Env) ->
+    Body = Env#env.body,
+    {_, XMax}   = cecho:getmaxyx(Body),
+    Left  = eappstat_utils:fnorm(String, Args),
+    FractTotal  = ProcLoad / AppLoad,
     {RightParent, FractParent} =
-    case ParentReds of
+    case ParentLoad of
         0 ->
             {undefined, undefined};
         _ ->
-            FractP = ProcReds / ParentReds,
+            FractP = ProcLoad / ParentLoad,
             BarP   = trunc(FractP * (XMax - 57)),
             {
                 ["|" || _ <- lists:seq(1, BarP)] ++ io_lib:format("~.1f%", [FractP * 100]),
@@ -300,21 +311,21 @@ f(X, Y, String, Args, {AppReds, ProcReds, ParentReds}, Window) ->
     end,
     BarTotal    = trunc(FractTotal  * (XMax - 57)),
     RightTotal = ["|" || _ <- lists:seq(1, BarTotal)] ++ io_lib:format("~.1f%", [FractTotal * 100]),
-    case move_if_ok(Y, X, Window) of
+    case move_if_ok(Y, X, Body) of
         ok ->
-            cecho:waddstr(Window, Left),
+            cecho:waddstr(Body, Left),
             case RightParent of
                 undefined ->
                     noop;
                 _ ->
-                    load_color_pale(FractParent, Window),
-                    cecho:wmove(Window, Y, 50),
-                    cecho:waddstr(Window, RightParent)
+                    load_color_pale(FractParent, Body),
+                    cecho:wmove(Body, Y, 50),
+                    cecho:waddstr(Body, RightParent)
             end,
-            load_color(FractTotal, Window),
-            cecho:wmove(Window, Y, 50),
-            cecho:waddstr(Window, RightTotal),
-            eappstat_utils:color(Window, ?WHITE_TYPE);
+            load_color(FractTotal, Body),
+            cecho:wmove(Body, Y, 50),
+            cecho:waddstr(Body, RightTotal),
+            eappstat_utils:color(Body, ?WHITE_TYPE);
         not_ok ->
             noop
     end.
