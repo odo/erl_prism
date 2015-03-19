@@ -276,7 +276,8 @@ f(X, Y, String, Args, Env) ->
     Body = Env#env.body,
     case move_if_ok(Y, X, Body) of
         ok ->
-            cecho:waddstr(Body, io_lib:format(eappstat_utils:fnorm(String, Args) ++ "\n", []));
+            cecho:waddstr(Body, io_lib:format(eappstat_utils:fnorm(String, Args) ++ "\n", [])),
+            blank_spacer(Body, Y);
         not_ok ->
             noop
     end.
@@ -288,7 +289,8 @@ f(X, Y, String, Args, {0, _, _}, Env) ->
     Left  = eappstat_utils:fnorm(String, Args),
     case move_if_ok(Y, X, Body) of
         ok ->
-            cecho:waddstr(Body, Left);
+            cecho:waddstr(Body, Left),
+            blank_spacer(Body, Y);
         _ ->
             noop
     end;
@@ -315,6 +317,8 @@ f(X, Y, String, Args, {AppLoad, ProcLoad, ParentLoad}, Env) ->
     case move_if_ok(Y, X, Body) of
         ok ->
             cecho:waddstr(Body, Left),
+            eappstat_utils:color(Body, ?WHITE_TYPE),
+            blank_spacer(Body, Y),
             case RightParent of
                 undefined ->
                     noop;
@@ -325,11 +329,15 @@ f(X, Y, String, Args, {AppLoad, ProcLoad, ParentLoad}, Env) ->
             end,
             load_color(FractTotal, Body),
             cecho:wmove(Body, Y, 50),
-            cecho:waddstr(Body, RightTotal),
-            eappstat_utils:color(Body, ?WHITE_TYPE);
+            cecho:waddstr(Body, RightTotal);
         not_ok ->
             noop
     end.
+
+blank_spacer(Window, Y) ->
+    eappstat_utils:color(Window, ?WHITE_TYPE),
+    cecho:wmove(Window, Y, 49),
+    cecho:waddstr(Window, "                ").
 
 format_number(Value, Reference, reductions) ->
     io_lib:format("~.1f%", [(Value / Reference) * 100]);
