@@ -1,6 +1,6 @@
 -record(capture, {tree, time, totals}).
 -record(node, {type, name, proc_info, totals, children = []}).
--record(env, {mode, time, totals, header, body, footer, x, y, x_max, y_max, cursor_y, shift_y, marked_node, toggle_open, current_sup_pid, open_pids, body_height}).
+-record(env, {capturing, mode, time, totals, header, body, footer, x, y, x_max, y_max, cursor_y, shift_y, marked_node, toggle_open, current_sup_pid, open_pids, body_height}).
 -record(totals, {reductions, memory, message_queue_len}).
 
 -define(BLACK, 0).

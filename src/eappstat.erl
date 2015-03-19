@@ -2,7 +2,7 @@
 -include("cecho.hrl").
 -include("include/eappstat.hrl").
 
--export([start/1, capture_and_plot/2, plot/2]).
+-export([start/1, capture_and_plot/3, plot/2]).
 
 -define(HEADERHEIGHT, 2).
 -define(FOOTERHEIGHT, 5).
@@ -23,22 +23,19 @@ input(Node, Capture, Env) ->
     case [cecho:getch()] of
         [10] ->
             % capture
-            {capture_and_plot(Node, Env), Env};
+            {capture_and_plot(Capture, Node, Env), Env};
          "r" ->
-            % reductions
-            EnvReds = Env#env{ mode = reductions },
-            EnvPlot = plot(Capture, EnvReds),
-            {Capture, EnvPlot};
+            switch_mode(reductions, Capture, Env);
          "m" ->
-            % memory
-            EnvMem  = Env#env{ mode = memory },
-            EnvPlot = plot(Capture, EnvMem),
-            {Capture, EnvPlot};
+            switch_mode(memory, Capture, Env);
          "q" ->
-            % message_queue_len
-            EnvQueue = Env#env{ mode = message_queue_len },
-            EnvPlot  = plot(Capture, EnvQueue),
-            {Capture, EnvPlot};
+            switch_mode(message_queue_len, Capture, Env);
+         "1" ->
+            switch_mode(reductions, Capture, Env);
+         "2" ->
+            switch_mode(memory, Capture, Env);
+         "3" ->
+            switch_mode(message_queue_len, Capture, Env);
          [66] ->
             % down
             EnvDown = Env#env{ cursor_y = Env#env.cursor_y + 1 },
@@ -58,6 +55,12 @@ input(Node, Capture, Env) ->
             {Capture, Env}
     end,
     input(Node, CaptureNew, EnvNew).
+
+switch_mode(Mode, Capture, Env) ->
+    EnvMode = Env#env{ mode = Mode },
+    EnvPlot = plot(Capture, EnvMode),
+    {Capture, EnvPlot}.
+
 
 adjust_shift_y(Env = #env{ cursor_y = CursorY, shift_y = ShiftY, body_height = BodyHeight }) ->
     case CursorY of
@@ -113,7 +116,8 @@ setup() ->
     cecho:scrollok(Body, true),
     #env{ mode = reductions, cursor_y = 0, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, footer = Footer, body_height = BodyHeight}.
 
-capture_and_plot(Node, Env) ->
+capture_and_plot(CaptureOld, Node, Env) ->
+    plot(CaptureOld, Env#env{ capturing = true }),
     Capture = eappstat_capture:capture(Node),
     plot(Capture, Env),
     Capture.

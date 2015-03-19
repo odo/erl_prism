@@ -4,7 +4,7 @@
 -behaviour(gen_server).
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([set_node/2, plot/0]).
+-export([set_env/1, set_node/2, plot/0]).
 
 -record(state, {env, node}).
 
@@ -15,6 +15,9 @@ start_link() ->
 
 set_node(Node, Env) ->
     gen_server:call(?MODULE, {set_node, Node, Env}).
+
+set_env(Env) ->
+    gen_server:call(?MODULE, {set_env, Env}).
 
 plot() ->
     gen_server:call(?MODULE, {plot}).
@@ -27,15 +30,24 @@ init([]) ->
 handle_call({set_node, Node, Env}, _From, State) ->
     {reply, ok, State#state{ node = Node, env = Env }};
 
+handle_call({set_env, Env}, _From, State) ->
+    {reply, ok, State#state{ env = Env }};
 
 handle_call({plot}, _From, State = #state{ node = undefined, env = Env }) ->
     {reply, ok, State};
-handle_call({plot}, _From, State = #state{ node = Node = #node{ proc_info = undefined, type = Type }, env = #env{ footer = Footer, mode = Mode } }) ->
+handle_call({plot}, _From, State = #state{ node = Node = #node{ proc_info = undefined, type = Type }, env = #env{ capturing = Capturing, footer = Footer, mode = Mode } }) ->
+    case Capturing of
+        true ->
+            eappstat_utils:color(Footer, ?WHITE_HL_TYPE),
+            eappstat_utils:f(1,  1, "Cap", [], Footer);
+        _ ->
+            eappstat_utils:f(1,  1, "   ", [], Footer)
+    end,
     Members = Node#node.children,
     eappstat_utils:color(Footer, ?WHITE_TYPE),
     Values         = [eappstat_utils:total(Mode, Member) || Member <- Members],
     Balance        = eappstat_utils:balance(Values),
-    eappstat_utils:f(1,  1, "                                                        ", [], Footer),
+    eappstat_utils:f(4,  1, "                                                        ", [], Footer),
     eappstat_utils:f(1,  2, "                                                        ", [], Footer),
     eappstat_utils:f(1,  3, "       type: ~p", [Type], Footer),
     eappstat_utils:f(32, 3, "Children: ~p", [length(Members)], Footer),
@@ -62,7 +74,14 @@ handle_call({plot}, _From, State = #state{ node = Node = #node{ proc_info = unde
     eappstat_utils:f(52,  4, "messageQueue: ~.1f ~s", [QueueValueAcc, QueueOOMAcc], Footer),
     cecho:wrefresh(Footer),
     {reply, ok, State};
-handle_call({plot}, _From, State = #state{ node = Node = #node{ proc_info = ProcInfo }, env = #env{ footer = Footer, mode = Mode } }) ->
+handle_call({plot}, _From, State = #state{ node = Node = #node{ proc_info = ProcInfo }, env = #env{ capturing = Capturing, footer = Footer, mode = Mode } }) ->
+    case Capturing of
+        true ->
+            eappstat_utils:color(Footer, ?WHITE_HL_TYPE),
+            eappstat_utils:f(1,  1, "Cap", [], Footer);
+        _ ->
+            eappstat_utils:f(1,  1, "   ", [], Footer)
+    end,
     eappstat_utils:color(Footer, ?WHITE_TYPE),
     Pid               = proplists:get_value(pid, ProcInfo),
     {Mod, Fun, Arity} = proplists:get_value(current_function, ProcInfo),
@@ -77,7 +96,6 @@ handle_call({plot}, _From, State = #state{ node = Node = #node{ proc_info = Proc
 
     % eappstat_utils:f(1,  1, "~s with ~p is ~p at ~p:~p/~p with ~p B and ~p msgs", [Node#node.name, Pid, Status, Mod, Fun, Arity, Memory, QueueLength], Footer),
 
-    eappstat_utils:f(1,  1, "      ", [], Footer),
     eappstat_utils:f(7,  1, "Pid: ~p", [Pid], Footer),
     eappstat_utils:f(32, 1, "Registered: ~s", [RegisteredName], Footer),
     eappstat_utils:f(7,  2, "Status: ~p", [Status], Footer),
