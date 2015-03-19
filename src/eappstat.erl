@@ -2,19 +2,20 @@
 -include("cecho.hrl").
 -include("include/eappstat.hrl").
 
--export([start/1, capture_and_plot/3, plot/2]).
+-export([start/1, capture_and_plot/2, plot/2]).
 
 -define(HEADERHEIGHT, 2).
 -define(FOOTERHEIGHT, 5).
 -define(INDENT, 2).
 
 start(Node) ->
+    application:set_env(eappstat, node, Node),
     application:start(eappstat),
     Env = setup(),
     input(Node, Env).
 
 input(Node, Env) ->
-    Capture = eappstat_capture:capture(Node),
+    Capture = eappstat_capture:capture(),
     plot(Capture, Env),
     input(Node, Capture, Env).
 
@@ -23,7 +24,7 @@ input(Node, Capture, Env) ->
     case [cecho:getch()] of
         [10] ->
             % capture
-            {capture_and_plot(Capture, Node, Env), Env};
+            {capture_and_plot(Capture, Env), Env};
          "r" ->
             switch_mode(reductions, Capture, Env);
          "m" ->
@@ -43,9 +44,19 @@ input(Node, Capture, Env) ->
             {Capture, adjust_shift_y(EnvPlot)};
          [65] ->
             % up
-            EnvUp = Env#env{ cursor_y = max(1, Env#env.cursor_y - 1) },
+            EnvUp   = Env#env{ cursor_y = max(1, Env#env.cursor_y - 1) },
             EnvPlot = plot(Capture, adjust_shift_y(EnvUp)),
             {Capture, EnvPlot};
+         "D" ->
+            % left
+            PrevCapture = eappstat_capture:prev_capture(),
+            EnvPlot     = plot(PrevCapture, Env),
+            {PrevCapture, EnvPlot};
+         "C" ->
+            % right
+            NextCapture = eappstat_capture:next_capture(),
+            EnvPlot     = plot(NextCapture, Env),
+            {NextCapture, EnvPlot};
          " " ->
             % we toggle during plotting
             EnvPlot  = plot(Capture, Env#env{ toggle_open = true }),
@@ -116,9 +127,9 @@ setup() ->
     cecho:scrollok(Body, true),
     #env{ mode = reductions, cursor_y = 0, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, footer = Footer, body_height = BodyHeight}.
 
-capture_and_plot(CaptureOld, Node, Env) ->
+capture_and_plot(CaptureOld, Env) ->
     plot(CaptureOld, Env#env{ capturing = true }),
-    Capture = eappstat_capture:capture(Node),
+    Capture = eappstat_capture:capture(),
     plot(Capture, Env),
     Capture.
 

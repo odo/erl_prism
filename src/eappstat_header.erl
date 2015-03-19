@@ -38,13 +38,14 @@ handle_call({set_capture, Capture}, _From, State) ->
 
 
 handle_call({plot}, _From, State) ->
-    #capture{ tree = Tree, time = Time } = State#state.capture,
+    #capture{ tree = Tree, time = Time, capture_index = CaptureIndex, capture_count = CaptureCount } = State#state.capture,
     #env{ header = Header, totals = Totals, mode = Mode } = State#state.env,
     cecho:werase(Header),
     eappstat_utils:color(Header, ?WHITE_TYPE),
     {{Y, M, D}, {Hr, Min, Sec}} = calendar:now_to_universal_time(Time),
     eappstat_utils:f(1,  0, "~s", [Tree#node.name], Header),
     eappstat_utils:f(45, 0, "~p-~p-~pT~p:~p:~p", [Y, M, D, Hr, Min, Sec], Header),
+    eappstat_utils:f(64, 0, "~p/~p", [CaptureIndex, CaptureCount], Header),
     {RedsValue, RedsOOM} = eappstat_utils:oom(Totals#totals.reductions, 1000),
     eappstat_utils:maybe_hl(Mode, reductions, Header),
     eappstat_utils:f(1,  1, "Reductions: ~.1f ~s/s", [RedsValue, RedsOOM], Header),

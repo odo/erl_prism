@@ -1,10 +1,78 @@
 -module(eappstat_capture).
+-behaviour(gen_server).
 
 -include("include/eappstat.hrl").
+-export([capture/0, prev_capture/0, next_capture/0, proc_info_async/4]).
+-export([start_link/1, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([capture/1, proc_info_async/4]).
+-record(state, {node, captures, capture_count, current_index}).
+
+%% Public API
+
+start_link(Node) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, Node, []).
+
+capture() ->
+    gen_server:call(?MODULE, {capture}).
+
+next_capture() ->
+    gen_server:call(?MODULE, {next_capture}).
+
+prev_capture() ->
+    gen_server:call(?MODULE, {prev_capture}).
+
+%% Callbacks
+
+init(Node) ->
+    {ok, #state{ node = Node, captures = [], capture_count = 0, current_index = 0}}.
+
+handle_call({capture}, _From, State) ->
+    Capture = capture(State#state.node),
+    CurrentCount = State#state.capture_count + 1,
+    CaptureIndex = set_index_and_count(Capture, CurrentCount, CurrentCount),
+    {reply, CaptureIndex, State#state{ captures = [Capture | State#state.captures ], current_index = CurrentCount, capture_count = CurrentCount}};
+
+handle_call({next_capture}, From, State) ->
+    handle_call({get_capture, State#state.current_index + 1}, From, State);
+
+handle_call({prev_capture}, From, State) ->
+    handle_call({get_capture, State#state.current_index - 1}, From, State);
+
+handle_call({get_capture, Index}, _From, State) ->
+    SaveIndex = save_index(Index, State),
+    Capture  = lists:nth(SaveIndex, State#state.captures),
+    CaptureIndex = set_index_and_count(Capture, SaveIndex, State#state.capture_count),
+    {reply, CaptureIndex, State#state{ current_index = SaveIndex }}.
+
+handle_cast(_Msg, State) ->
+    {noreply, State}.
+
+
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+save_index(Index, State) ->
+    CurrentIndex = State#state.capture_count,
+    case Index of
+        _ when Index < 1 ->
+            1;
+        _ when Index > CurrentIndex ->
+           CurrentIndex;
+        _ ->
+            Index
+    end.
+
 
 %%%%%%%%%%%%%%%%%%%%%%% capturing data
+
+set_index_and_count(Capture, Index, Count) ->
+    Capture#capture{ capture_index = Index, capture_count = Count }.
 
 capture(Node) ->
     lager:info("Capturing from ~p\n", [Node]),

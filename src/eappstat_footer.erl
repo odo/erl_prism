@@ -80,6 +80,7 @@ handle_call({plot}, _From, State = #state{ node = Node = #node{ proc_info = Proc
             eappstat_utils:color(Footer, ?WHITE_HL_TYPE),
             eappstat_utils:f(1,  1, "Cap", [], Footer);
         _ ->
+            eappstat_utils:color(Footer, ?WHITE_TYPE),
             eappstat_utils:f(1,  1, "   ", [], Footer)
     end,
     eappstat_utils:color(Footer, ?WHITE_TYPE),

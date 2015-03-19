@@ -9,7 +9,8 @@
 %% ===================================================================
 
 start(_StartType, _StartArgs) ->
-    eappstat_sup:start_link().
+    {ok, Node} = application:get_env(eappstat, node),
+    eappstat_sup:start_link(Node).
 
 stop(_State) ->
     ok.
