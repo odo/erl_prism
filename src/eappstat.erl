@@ -294,23 +294,24 @@ f(X, Y, String, Args, {0, _, _}, Env) ->
     end;
 f(X, Y, String, Args, {AppLoad, ProcLoad, ParentLoad}, Env) ->
     Body = Env#env.body,
+    Mode = Env#env.mode,
     {_, XMax}   = cecho:getmaxyx(Body),
     Left  = eappstat_utils:fnorm(String, Args),
     FractTotal  = ProcLoad / AppLoad,
     {RightParent, FractParent} =
-    case ParentLoad of
-        0 ->
+    case (ParentLoad > 0) and plot_fract_parent(Mode) of
+        false ->
             {undefined, undefined};
-        _ ->
+        true ->
             FractP = ProcLoad / ParentLoad,
             BarP   = trunc(FractP * (XMax - 57)),
             {
-                ["|" || _ <- lists:seq(1, BarP)] ++ io_lib:format("~.1f%", [FractP * 100]),
+                ["|" || _ <- lists:seq(1, BarP)] ++ format_number(ProcLoad, ParentLoad, Mode),
                 FractP
             }
     end,
     BarTotal    = trunc(FractTotal  * (XMax - 57)),
-    RightTotal = ["|" || _ <- lists:seq(1, BarTotal)] ++ io_lib:format("~.1f%", [FractTotal * 100]),
+    RightTotal = ["|" || _ <- lists:seq(1, BarTotal)] ++ format_number(ProcLoad, AppLoad, Mode),
     case move_if_ok(Y, X, Body) of
         ok ->
             cecho:waddstr(Body, Left),
@@ -329,6 +330,18 @@ f(X, Y, String, Args, {AppLoad, ProcLoad, ParentLoad}, Env) ->
         not_ok ->
             noop
     end.
+
+format_number(Value, Reference, reductions) ->
+    io_lib:format("~.1f%", [(Value / Reference) * 100]);
+format_number(Value, _Reference, memory) ->
+    {MemoryValue, MemoryOOM} = eappstat_utils:oom(Value, 1024),
+    io_lib:format("~.1f ~sB", [MemoryValue, MemoryOOM]);
+format_number(Value, _Reference, message_queue_len) ->
+    io_lib:format("~p", [Value]).
+
+
+plot_fract_parent(reductions) -> true;
+plot_fract_parent(_)          -> false.
 
 move_if_ok(X, Y, Window) ->
     {YMax, _XMax} = cecho:getmaxyx(),
