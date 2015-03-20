@@ -99,7 +99,7 @@ capture(Node) ->
             Tree3            = add_totals(Tree2, memory),
             Tree4            = add_totals(Tree3, message_queue_len),
             lager:info("ProcsTree:~p ProcsNonTree:~p\n", [length(ProcsTree), length(ProcInfosNonTree)]),
-            #capture{ tree = Tree4, time = os:timestamp(), totals = Tree4#node.totals }
+            #capture{ process_count = length(Pids), tree = Tree4, time = os:timestamp(), totals = Tree4#node.totals }
     end.
 
 add_totals(Node, Type) ->

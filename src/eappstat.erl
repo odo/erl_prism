@@ -125,7 +125,7 @@ setup() ->
     Footer       = cecho:newwin(?FOOTERHEIGHT, XMax, ?HEADERHEIGHT + BodyHeight, 0),
     cecho:keypad(Body, true),
     cecho:scrollok(Body, true),
-    #env{ mode = reductions, cursor_y = 0, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, footer = Footer, body_height = BodyHeight}.
+    #env{ mode = reductions, cursor_y = 1, shift_y = 0, open_pids = sets:new(), header = Header, body = Body, footer = Footer, body_height = BodyHeight}.
 
 capture_and_plot(CaptureOld, Env) ->
     plot(CaptureOld, Env#env{ capturing = true }),
@@ -317,13 +317,13 @@ f(X, Y, String, Args, {AppLoad, ProcLoad, ParentLoad}, Env) ->
             {undefined, undefined};
         true ->
             FractP = ProcLoad / ParentLoad,
-            BarP   = trunc(FractP * (XMax - 57)),
+            BarP   = trunc(FractP * (XMax - 59)),
             {
                 ["|" || _ <- lists:seq(1, BarP)] ++ format_number(ProcLoad, ParentLoad, Mode),
                 FractP
             }
     end,
-    BarTotal    = trunc(FractTotal  * (XMax - 57)),
+    BarTotal    = trunc(FractTotal  * (XMax - 59)),
     RightTotal = ["|" || _ <- lists:seq(1, BarTotal)] ++ format_number(ProcLoad, AppLoad, Mode),
     case move_if_ok(Y, X, Body) of
         ok ->
