@@ -45,7 +45,7 @@ handle_call({plot}, _From, State) ->
     {{Y, M, D}, {Hr, Min, Sec}} = calendar:now_to_universal_time(Time),
     eappstat_utils:f(1,  0, "~s", [Tree#node.name], Header),
     eappstat_utils:f(33, 0, "~p Procs", [ProcessCount], Header),
-    eappstat_utils:f(45, 0, "~p-~p-~pT~p:~p:~p", [Y, M, D, Hr, Min, Sec], Header),
+    eappstat_utils:f(45, 0, "~4.10.0B-~2.10.0B-~2.10.0BT~2.10.0B:~2.10.0B:~2.10.0B", [Y, M, D, Hr, Min, Sec], Header),
     eappstat_utils:f(64, 0, "~p/~p", [CaptureIndex, CaptureCount], Header),
     {RedsValue, RedsOOM} = eappstat_utils:oom(Totals#totals.reductions, 1000),
     eappstat_utils:maybe_hl(Mode, reductions, Header),

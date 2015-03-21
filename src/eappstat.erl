@@ -37,6 +37,9 @@ input(Node, Capture, Env) ->
             switch_mode(memory, Capture, Env);
          "3" ->
             switch_mode(message_queue_len, Capture, Env);
+         "x" ->
+            eappstat_export:export(Capture, Env),
+            {Capture, Env};
          [66] ->
             % down
             EnvDown = Env#env{ cursor_y = Env#env.cursor_y + 1 },

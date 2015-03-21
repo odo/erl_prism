@@ -4,7 +4,7 @@
 -behaviour(gen_server).
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([set_env/1, set_node/2, plot/0]).
+-export([set_env/1, set_node/2, node/0, plot/0]).
 
 -record(state, {env, node}).
 
@@ -22,6 +22,9 @@ set_env(Env) ->
 plot() ->
     gen_server:call(?MODULE, {plot}).
 
+node() ->
+    gen_server:call(?MODULE, {node}).
+
 %% Callbacks
 
 init([]) ->
@@ -33,7 +36,10 @@ handle_call({set_node, Node, Env}, _From, State) ->
 handle_call({set_env, Env}, _From, State) ->
     {reply, ok, State#state{ env = Env }};
 
-handle_call({plot}, _From, State = #state{ node = undefined, env = Env }) ->
+handle_call({node}, _From, State) ->
+    {reply, State#state.node, State};
+
+handle_call({plot}, _From, State = #state{ node = undefined }) ->
     {reply, ok, State};
 handle_call({plot}, _From, State = #state{ node = Node = #node{ proc_info = undefined, type = Type }, env = #env{ capturing = Capturing, footer = Footer, mode = Mode } }) ->
     case Capturing of
