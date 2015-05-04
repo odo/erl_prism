@@ -1,12 +1,12 @@
--module(eappstat_utils).
+-module(erl_prism_utils).
 -include("cecho.hrl").
--include("include/eappstat.hrl").
+-include("include/erl_prism.hrl").
 
 -compile([export_all]).
 
 f(X, Y, String, Args, Window) ->
     cecho:wmove(Window, Y, X),
-    cecho:waddstr(Window, io_lib:format(eappstat_utils:fnorm(String, Args) ++ "\n", [])).
+    cecho:waddstr(Window, io_lib:format(erl_prism_utils:fnorm(String, Args) ++ "\n", [])).
 
 total(reductions, Node) ->
     Node#node.totals#totals.reductions;
@@ -58,6 +58,6 @@ balance(Reductions) ->
         0 ->
             "-";
         _ ->
-            1 - eappstat_gini:index(Reductions)
+            1 - erl_prism_gini:index(Reductions)
     end.
 

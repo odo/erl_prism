@@ -1,4 +1,4 @@
--module(eappstat_gini).
+-module(erl_prism_gini).
 
 -export([index/1]).
 

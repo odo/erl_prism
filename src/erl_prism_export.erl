@@ -1,5 +1,5 @@
--module(eappstat_export).
--include("include/eappstat.hrl").
+-module(erl_prism_export).
+-include("include/erl_prism.hrl").
 
 -ifdef(TEST).
 -compile([export_all]).
@@ -8,15 +8,15 @@
 -export([export/2]).
 
 export(Capture, Env) ->
-    {ok, Dir} = application:get_env(eappstat, dir),
-    TemplateNode = eappstat_footer:node(),
+    {ok, Dir} = application:get_env(erl_prism, dir),
+    TemplateNode = erl_prism_footer:node(),
     lager:error("export\n", []),
     Type = TemplateNode#node.type,
     case Type of
         node        -> noop;
         application -> noop;
         _ ->
-            Captures = eappstat_capture:equivalents(TemplateNode),
+            Captures = erl_prism_capture:equivalents(TemplateNode),
             lager:error("found ~p Captures\n", [length(Captures)]),
             lager:error("template: ~p\n", [TemplateNode]),
             lager:error("captures: ~p\n",  [Captures]),

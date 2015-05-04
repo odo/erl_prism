@@ -1,9 +1,9 @@
-{application, eappstat,
+{application, erl_prism,
  [
   {description, ""},
   {vsn, "0.1.0"},
   {registered, []},
   {applications, [ kernel, stdlib ]},
-  {mod, { eappstat_app, []}},
+  {mod, { erl_prism_app, []}},
   {env, []}
  ]}.

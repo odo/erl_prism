@@ -1,4 +1,4 @@
--module(eappstat_sup).
+-module(erl_prism_sup).
 
 -behaviour(supervisor).
 
@@ -21,16 +21,16 @@ start_link(Node) ->
 
 init(Node) ->
     Capture = {
-        eappstat_capture, { eappstat_capture, start_link, [Node] },
-        permanent, 2000, worker, [eappstat_capture]
+        erl_prism_capture, { erl_prism_capture, start_link, [Node] },
+        permanent, 2000, worker, [erl_prism_capture]
      },
     Header = {
-        eappstat_header, { eappstat_header, start_link, [] },
-        permanent, 2000, worker, [eappstat_header]
+        erl_prism_header, { erl_prism_header, start_link, [] },
+        permanent, 2000, worker, [erl_prism_header]
      },
     Footer = {
-        eappstat_footer, { eappstat_footer, start_link, [] },
-        permanent, 2000, worker, [eappstat_footer]
+        erl_prism_footer, { erl_prism_footer, start_link, [] },
+        permanent, 2000, worker, [erl_prism_footer]
      },
     {ok, { {one_for_one, 5, 10}, [Capture, Header, Footer]} }.
 

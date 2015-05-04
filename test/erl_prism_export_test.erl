@@ -1,4 +1,4 @@
--module(eappstat_export_test).
+-module(erl_prism_export_test).
 -compile([export_all]).
 -include_lib("eunit/include/eunit.hrl").
 -define(TWOWORKERS,
@@ -12,24 +12,24 @@
 ).
 
 csv_worker_header_workers_test() ->
-    Header   = eappstat_export:csv_header(?TWOWORKERS),
+    Header   = erl_prism_export:csv_header(?TWOWORKERS),
     Expected = <<"time,helium_cache_pool_1_revolver\n">>,
     ?assertEqual(Expected, iolist_to_binary(Header)).
 
 csv_worker_header_pool_test() ->
-    Header   = eappstat_export:csv_header(?TWOPOOLS),
+    Header   = erl_prism_export:csv_header(?TWOPOOLS),
     Expected = <<"time,pid_1,pid_2,pid_3,pid_4\n">>,
     ?assertEqual(Expected, iolist_to_binary(Header)).
 
 csv_line_worker_test() ->
     [{Time, Node} | _] = ?TWOWORKERS,
-    CSV = eappstat_export:csv_line(worker, Time, Node, reductions),
+    CSV = erl_prism_export:csv_line(worker, Time, Node, reductions),
     Expected = <<"2015-03-29 16:52:52,10\n">>,
     ?assertEqual(Expected, iolist_to_binary(CSV)).
 
 csv_line_pool_test() ->
     [{Time, Node} | _] = ?TWOPOOLS,
-    CSV = eappstat_export:csv_line(pool, Time, Node, reductions),
+    CSV = erl_prism_export:csv_line(pool, Time, Node, reductions),
     Expected = <<"2015-04-23 12:11:49,0,0,48\n">>,
     ?assertEqual(Expected, iolist_to_binary(CSV)).
 

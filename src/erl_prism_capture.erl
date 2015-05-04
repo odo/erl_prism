@@ -1,7 +1,7 @@
--module(eappstat_capture).
+-module(erl_prism_capture).
 -behaviour(gen_server).
 
--include("include/eappstat.hrl").
+-include("include/erl_prism.hrl").
 -export([equivalents/1, capture/0, prev_capture/0, next_capture/0, proc_info_async/4]).
 -export([start_link/1, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 

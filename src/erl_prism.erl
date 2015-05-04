@@ -1,6 +1,6 @@
--module(eappstat).
+-module(erl_prism).
 -include("cecho.hrl").
--include("include/eappstat.hrl").
+-include("include/erl_prism.hrl").
 
 -export([start/1, capture_and_plot/2, plot/2]).
 
@@ -9,13 +9,13 @@
 -define(INDENT, 2).
 
 start(Node) ->
-    application:set_env(eappstat, node, Node),
-    application:start(eappstat),
+    application:set_env(erl_prism, node, Node),
+    application:start(erl_prism),
     Env = setup(),
     input(Node, Env).
 
 input(Node, Env) ->
-    Capture = eappstat_capture:capture(),
+    Capture = erl_prism_capture:capture(),
     plot(Capture, Env),
     input(Node, Capture, Env).
 
@@ -38,7 +38,7 @@ input(Node, Capture, Env) ->
          "3" ->
             switch_mode(message_queue_len, Capture, Env);
          "x" ->
-            eappstat_export:export(Capture, Env),
+            erl_prism_export:export(Capture, Env),
             {Capture, Env};
          [66] ->
             % down
@@ -52,12 +52,12 @@ input(Node, Capture, Env) ->
             {Capture, EnvPlot};
          "D" ->
             % left
-            PrevCapture = eappstat_capture:prev_capture(),
+            PrevCapture = erl_prism_capture:prev_capture(),
             EnvPlot     = plot(PrevCapture, Env),
             {PrevCapture, EnvPlot};
          "C" ->
             % right
-            NextCapture = eappstat_capture:next_capture(),
+            NextCapture = erl_prism_capture:next_capture(),
             EnvPlot     = plot(NextCapture, Env),
             {NextCapture, EnvPlot};
          " " ->
@@ -132,7 +132,7 @@ setup() ->
 
 capture_and_plot(CaptureOld, Env) ->
     plot(CaptureOld, Env#env{ capturing = true }),
-    Capture = eappstat_capture:capture(),
+    Capture = erl_prism_capture:capture(),
     plot(Capture, Env),
     Capture.
 
@@ -147,12 +147,12 @@ plot(Capture = #capture{ tree = Tree, totals = Totals }, Env) ->
     EnvPlot.
 
 plot_header(Env, Capture) ->
-    eappstat_header:set_env(Env),
-    eappstat_header:set_capture(Capture),
-    eappstat_header:plot().
+    erl_prism_header:set_env(Env),
+    erl_prism_header:set_capture(Capture),
+    erl_prism_header:plot().
 
 plot_footer() ->
-    eappstat_footer:plot().
+    erl_prism_footer:plot().
 
 plot_body(Tree, Env = #env{ body = Body } ) ->
     Result = plot_table(undefined, Tree, Env#env{ x = 1, y = 1 }),
@@ -196,8 +196,8 @@ plot_table(Parent, Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = 
 
 plot_pool(Pool, Env) ->
     Members         = Pool#node.children,
-    Values          = [eappstat_utils:total(Env#env.mode, Member) || Member <- Members],
-    Balance         = eappstat_utils:balance(Values),
+    Values          = [erl_prism_utils:total(Env#env.mode, Member) || Member <- Members],
+    Balance         = erl_prism_utils:balance(Values),
     case is_number(Balance) of
         true ->
             maybe_highlight_pool(
@@ -227,31 +227,31 @@ maybe_open(Env) ->
     Env.
 
 maybe_highlight(Fun, Node, Env = #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
-    eappstat_footer:set_node(Node, Env),
-    eappstat_utils:color(Body, ?CURSOR_HL),
+    erl_prism_footer:set_node(Node, Env),
+    erl_prism_utils:color(Body, ?CURSOR_HL),
     Fun();
 maybe_highlight(Fun, _, #env{ body = Body }) ->
-    eappstat_utils:color(Body, ?WHITE_TYPE),
+    erl_prism_utils:color(Body, ?WHITE_TYPE),
     Fun().
 
 maybe_highlight_pool(Fun, Node, Env = #env{ cursor_y = CursorY, y = CursorY, body = Body }) ->
-    eappstat_footer:set_node(Node, Env),
-    eappstat_utils:color(Body, ?CURSOR_HL),
+    erl_prism_footer:set_node(Node, Env),
+    erl_prism_utils:color(Body, ?CURSOR_HL),
     Fun();
 maybe_highlight_pool(Fun, _, #env{ body = Body }) ->
-    eappstat_utils:color(Body, ?POOL_TYPE),
+    erl_prism_utils:color(Body, ?POOL_TYPE),
     Fun().
 
 print(_, Node = #node{ type = node }, Env) ->
     f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {totals(Env#env.mode, Env), totals(Env#env.mode, Env), totals(Env#env.mode, Env)}, Env);
 print(Parent, Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
 print(Parent, Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
 print(Parent, Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
 print(Parent, Node = #node{ type = process }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {totals(Env#env.mode, Env), eappstat_utils:total(Env#env.mode, Node), eappstat_utils:total(Env#env.mode, Parent)}, Env);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
 print(_, #node{ type = Type }, _) ->
     lager:info("unkonwn type: ~p\n", [Type]).
 
@@ -264,7 +264,7 @@ totals(message_queue_len, Env) ->
 
 sort_by_reductions(Nodes) ->
     lists:sort(
-        fun(A, B) -> eappstat_utils:total(reductions, A) > eappstat_utils:total(reductions, B) end,
+        fun(A, B) -> erl_prism_utils:total(reductions, A) > erl_prism_utils:total(reductions, B) end,
         Nodes
      ).
 
@@ -274,7 +274,7 @@ f(X, Y, String, Args, Env) ->
     Body = Env#env.body,
     case move_if_ok(Y, X, Body) of
         ok ->
-            cecho:waddstr(Body, io_lib:format(eappstat_utils:fnorm(String, Args) ++ "\n", [])),
+            cecho:waddstr(Body, io_lib:format(erl_prism_utils:fnorm(String, Args) ++ "\n", [])),
             blank_spacer(Body, Y);
         not_ok ->
             noop
@@ -284,7 +284,7 @@ f(_, Y, _, _, _, _) when Y < 1 ->
     noop;
 f(X, Y, String, Args, {0, _, _}, Env) ->
     Body = Env#env.body,
-    Left  = eappstat_utils:fnorm(String, Args),
+    Left  = erl_prism_utils:fnorm(String, Args),
     case move_if_ok(Y, X, Body) of
         ok ->
             cecho:waddstr(Body, Left),
@@ -296,7 +296,7 @@ f(X, Y, String, Args, {AppLoad, ProcLoad, ParentLoad}, Env) ->
     Body = Env#env.body,
     Mode = Env#env.mode,
     {_, XMax}   = cecho:getmaxyx(Body),
-    Left  = eappstat_utils:fnorm(String, Args),
+    Left  = erl_prism_utils:fnorm(String, Args),
     FractTotal  = ProcLoad / AppLoad,
     {RightParent, FractParent} =
     case (ParentLoad > 0) and (ProcLoad > 0) and plot_fract_parent(Mode) of
@@ -315,7 +315,7 @@ f(X, Y, String, Args, {AppLoad, ProcLoad, ParentLoad}, Env) ->
     case move_if_ok(Y, X, Body) of
         ok ->
             cecho:waddstr(Body, Left),
-            eappstat_utils:color(Body, ?WHITE_TYPE),
+            erl_prism_utils:color(Body, ?WHITE_TYPE),
             blank_spacer(Body, Y),
             case RightParent of
                 undefined ->
@@ -333,14 +333,14 @@ f(X, Y, String, Args, {AppLoad, ProcLoad, ParentLoad}, Env) ->
     end.
 
 blank_spacer(Window, Y) ->
-    eappstat_utils:color(Window, ?WHITE_TYPE),
+    erl_prism_utils:color(Window, ?WHITE_TYPE),
     cecho:wmove(Window, Y, 49),
     cecho:waddstr(Window, "                ").
 
 format_number(Value, Reference, reductions) ->
     io_lib:format("~.1f%", [(Value / Reference) * 100]);
 format_number(Value, _Reference, memory) ->
-    {MemoryValue, MemoryOOM} = eappstat_utils:oom(Value, 1024),
+    {MemoryValue, MemoryOOM} = erl_prism_utils:oom(Value, 1024),
     io_lib:format("~.1f ~sB", [MemoryValue, MemoryOOM]);
 format_number(Value, _Reference, message_queue_len) ->
     io_lib:format("~p", [Value]).
@@ -367,7 +367,7 @@ load_color(Fract, Window) ->
         _ when Fract < 0.50 -> ?YELLOW_TYPE;
         _ -> ?RED_TYPE
     end,
-    eappstat_utils:color(Window, Color).
+    erl_prism_utils:color(Window, Color).
 
 load_color_pale(Fract, Window) ->
     Color =
@@ -376,4 +376,4 @@ load_color_pale(Fract, Window) ->
         _ when Fract < 0.50 -> ?YELLOW_PALE_TYPE;
         _ -> ?RED_PALE_TYPE
     end,
-    eappstat_utils:color(Window, Color).
+    erl_prism_utils:color(Window, Color).
