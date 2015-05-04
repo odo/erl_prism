@@ -59,7 +59,7 @@ handle_call({plot}, _From, State = #state{ node = Node = #node{ proc_info = unde
     eappstat_utils:f(32, 3, "Children: ~p", [length(Members)], Footer),
     case is_number(Balance) of
         true ->
-            eappstat_utils:f(52, 3, "Balance: ~.1f %", [Balance], Footer);
+            eappstat_utils:f(52, 3, "Balance: ~.1f %", [Balance * 100], Footer);
         false ->
             eappstat_utils:f(52, 3, "Balance: ~s", [Balance], Footer)
     end,

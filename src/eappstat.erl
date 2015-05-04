@@ -159,7 +159,7 @@ plot_body(Tree, Env = #env{ body = Body } ) ->
     cecho:wrefresh(Body),
     Result.
 
-plot_table(Parent, Node = #node{ type = supervisor }, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
+plot_table(Parent, Node = #node{ type = supervisor, children = Children }, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
     case Y >= (BodyHeight + ShiftY) of
         true ->
             Env;
@@ -167,17 +167,20 @@ plot_table(Parent, Node = #node{ type = supervisor }, Env = #env{ y = Y, body_he
             EnvCurrentSupPid = Env#env{ current_sup_pid = proplists:get_value(pid, Node#node.proc_info) },
             maybe_highlight(fun() -> print(Parent, Node, EnvCurrentSupPid) end, Node, EnvCurrentSupPid),
             NewEnv = EnvCurrentSupPid#env{ y = Y + 1, x = EnvCurrentSupPid#env.x + ?INDENT },
-            case is_pool(Node#node.children, NewEnv) of
-                true ->
-                    PoolEnv = plot_pool(Node#node.children, maybe_open(NewEnv#env{ x = NewEnv#env.x })),
-                    PoolEnv#env{ x = NewEnv#env.x - ?INDENT };
-                false ->
-                    Children = sort_by_reductions(Node#node.children),
-                    ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Node, Child, maybe_open(FoldEnv)) end, NewEnv, Children),
-                    ChildEnv#env{ x = NewEnv#env.x - ?INDENT }
-            end
+            ChildEnv = lists:foldl(fun(Child, FoldEnv) -> plot_table(Node, Child, maybe_open(FoldEnv)) end, NewEnv, Children),
+            ChildEnv
     end;
 
+plot_table(_Parent, Node = #node{ type = pool }, Env = #env{ current_sup_pid = CurrentSupPid, open_pids = OpenPids }) ->
+    case sets:is_element(CurrentSupPid, OpenPids) of
+        false ->
+            PoolEnv = plot_pool(Node, maybe_open(Env)),
+            PoolEnv#env{ x = PoolEnv#env.x - ?INDENT };
+        true ->
+            Children = sort_by_reductions(Node#node.children),
+            EnvNew   = lists:foldl(fun(Child, FoldEnv) -> plot_table(Node, Child, maybe_open(FoldEnv)) end, Env#env{ x = Env#env.x + ?INDENT }, Children),
+            EnvNew#env{ x = EnvNew#env.x - ?INDENT }
+    end;
 
 plot_table(Parent, Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = ShiftY }) ->
     case Y >= (BodyHeight + ShiftY) of
@@ -191,25 +194,21 @@ plot_table(Parent, Node, Env = #env{ y = Y, body_height = BodyHeight, shift_y = 
     end.
 
 
-
-plot_pool(Members, Env) ->
+plot_pool(Pool, Env) ->
+    Members         = Pool#node.children,
     Values          = [eappstat_utils:total(Env#env.mode, Member) || Member <- Members],
     Balance         = eappstat_utils:balance(Values),
-    TotalReductions = lists:sum([eappstat_utils:total(reductions, Member) || Member <- Members]),
-    TotalMemory     = lists:sum([eappstat_utils:total(memory, Member) || Member <- Members]),
-    TotalMsg        = lists:sum([eappstat_utils:total(message_queue_len, Member) || Member <- Members]),
-    Totals          = #totals{ reductions = TotalReductions, memory = TotalMemory, message_queue_len = TotalMsg },
     case is_number(Balance) of
         true ->
             maybe_highlight_pool(
                 fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~.1f %", [length(Members), Balance * 100], Env) end,
-                #node{ type = pool, totals = Totals, children = Members},
+                Pool,
                 Env
              );
         false ->
             maybe_highlight_pool(
                 fun() -> f(Env#env.x, Env#env.y - Env#env.shift_y, "p: procs: ~p balance: ~s", [length(Members), Balance], Env) end,
-                #node{ type = pool, totals = Totals, children = Members},
+                Pool,
                 Env
             )
     end,
@@ -256,21 +255,6 @@ print(Parent, Node = #node{ type = process }, Env) ->
 print(_, #node{ type = Type }, _) ->
     lager:info("unkonwn type: ~p\n", [Type]).
 
-is_pool([_], _) ->
-    false;
-is_pool(Members, #env{ current_sup_pid = CurrentSupPid, open_pids = OpenPids } ) ->
-    case sets:is_element(CurrentSupPid, OpenPids) of
-        true ->
-            false;
-        false ->
-            AllWorkers = lists:all(fun(M) -> M#node.type == worker end, Members),
-            InitialCalls =
-            [proplists:get_value('$initial_call', proplists:get_value(dictionary, Member#node.proc_info))
-             || Member <- Members],
-            AllSameCalls = length(lists:usort(InitialCalls)) == 1,
-            AllWorkers and AllSameCalls
-    end.
-
 totals(reductions, Env) ->
     Env#env.totals#totals.reductions;
 totals(memory, Env) ->
@@ -315,7 +299,7 @@ f(X, Y, String, Args, {AppLoad, ProcLoad, ParentLoad}, Env) ->
     Left  = eappstat_utils:fnorm(String, Args),
     FractTotal  = ProcLoad / AppLoad,
     {RightParent, FractParent} =
-    case (ParentLoad > 0) and plot_fract_parent(Mode) of
+    case (ParentLoad > 0) and (ProcLoad > 0) and plot_fract_parent(Mode) of
         false ->
             {undefined, undefined};
         true ->

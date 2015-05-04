@@ -1,34 +1,68 @@
 -module(eappstat_export).
 -include("include/eappstat.hrl").
 
+-ifdef(TEST).
+-compile([export_all]).
+-endif.
+
 -export([export/2]).
 
 export(Capture, Env) ->
-    Time      = Capture#capture.time,
     {ok, Dir} = application:get_env(eappstat, dir),
-    Node = eappstat_footer:node(),
-    Type = Node#node.type,
+    TemplateNode = eappstat_footer:node(),
+    lager:error("export\n", []),
+    Type = TemplateNode#node.type,
     case Type of
         node        -> noop;
         application -> noop;
         _ ->
+            Captures = eappstat_capture:equivalents(TemplateNode),
+            lager:error("found ~p Captures\n", [length(Captures)]),
+            lager:error("template: ~p\n", [TemplateNode]),
+            lager:error("captures: ~p\n",  [Captures]),
             Mode = Env#env.mode,
-            Path = Dir ++ "/" ++ file_name(Node) ++ "_" ++ atom_to_list(Mode) ++ ".cvs",
-            Data = csv(Node#node.type, Time, Node, Mode),
+            Path = Dir ++ "/" ++ file_name(TemplateNode) ++ "_" ++ atom_to_list(Mode) ++ ".cvs",
+            Data = [csv_header(Captures), [csv_line(Node#node.type, Time, Node, Mode) || {Time, Node} <- Captures]],
+            lager:error("csvbin:~p", [iolist_to_binary(Data)]),
             ok   = file:write_file(Path, iolist_to_binary(Data))
     end.
 
-csv(pool, Time, #node{ children = Children }, Mode) ->
-    [header(Children), time_string(Time), ",", data(pool, Children, Mode)];
-csv(_, Time, Node, Mode) ->
-    [header([Node]), time_string(Time), ",", data(else, Node, Mode)].
+csv_header([{_, Node} | _ ] = Captures) ->
+    csv_header(Node#node.type, Captures).
+csv_header(pool, Captures) ->
+    header(pool, Captures);
+csv_header(Type, Captures) ->
+    header(Type, Captures).
 
-header(Children) ->
-    PidString = fun(#node{ proc_info = ProcInfo }) ->
-            Pid = proplists:get_value(pid, ProcInfo),
-            io_lib:format("~p", [Pid])
+header(pool, Captures) ->
+    HeaderNames = lists:append([header_names(Node#node.children) || {_, Node} <- Captures]),
+    HeaderNamesUniq = lists:usort(HeaderNames),
+    ["time", ",", string:join(HeaderNamesUniq, ","), "\n"];
+
+header(_, Captures) ->
+    HeaderNames = header_names(Captures),
+    ["time", ",", string:join(HeaderNames, ","), "\n"].
+
+header_names(Nodes) ->
+    lists:usort([header_name(Node) || Node <- Nodes]).
+
+header_name({_, Node}) ->
+    header_name(Node);
+header_name(#node{ proc_info = ProcInfo }) ->
+    Name =
+    case proplists:get_value(registered_name, ProcInfo) of
+        [] ->
+            proplists:get_value(pid, ProcInfo);
+        RegName ->
+            RegName
     end,
-    ["time", ",", string:join([PidString(Child) || Child <- Children], ","), "\n"].
+    io_lib:format("~p", [Name]).
+
+
+csv_line(pool, Time, #node{ children = Children }, Mode) ->
+    [time_string(Time), ",", data(pool, Children, Mode), "\n"];
+csv_line(_, Time, Node, Mode) ->
+    [time_string(Time), ",", data(else, Node, Mode), "\n"].
 
 data(pool, Children, Mode) ->
     string:join([data(worker, Child, Mode) || Child <- Children], ",");

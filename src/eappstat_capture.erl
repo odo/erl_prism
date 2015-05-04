@@ -2,7 +2,7 @@
 -behaviour(gen_server).
 
 -include("include/eappstat.hrl").
--export([capture/0, prev_capture/0, next_capture/0, proc_info_async/4]).
+-export([equivalents/1, capture/0, prev_capture/0, next_capture/0, proc_info_async/4]).
 -export([start_link/1, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -record(state, {node, captures, capture_count, current_index}).
@@ -20,6 +20,9 @@ next_capture() ->
 
 prev_capture() ->
     gen_server:call(?MODULE, {prev_capture}).
+
+equivalents(Node) ->
+    gen_server:call(?MODULE, {equivalents, Node}).
 
 %% Callbacks
 
@@ -42,7 +45,11 @@ handle_call({get_capture, Index}, _From, State) ->
     SaveIndex = save_index(Index, State),
     Capture  = lists:nth(SaveIndex, State#state.captures),
     CaptureIndex = set_index_and_count(Capture, SaveIndex, State#state.capture_count),
-    {reply, CaptureIndex, State#state{ current_index = SaveIndex }}.
+    {reply, CaptureIndex, State#state{ current_index = SaveIndex }};
+
+handle_call({equivalents, Node}, _From, State) ->
+    Equivalents = [{Capture#capture.time, hd(equivalent(Node, Capture#capture.tree))} || Capture <- State#state.captures],
+    {reply, Equivalents, State}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -68,6 +75,32 @@ save_index(Index, State) ->
             Index
     end.
 
+
+%%%%%%%%%%%%%%%%%%%%%%% internal
+
+equivalent(TemplateNode, CaptureNode) ->
+    case is_equivalent(equivalents_signature(TemplateNode), equivalents_signature(CaptureNode)) of
+        true ->
+            CaptureNode;
+        false ->
+            lists:flatten([equivalent(TemplateNode, Child) || Child <- CaptureNode#node.children])
+    end.
+
+is_equivalent({pool, Name, _, _}, {pool, Name, _, _}) ->
+    true;
+is_equivalent({pool, _, _, _}, {_, _, _, _}) ->
+    false;
+is_equivalent({_, _, Pid, _}, {_, _, Pid, _}) ->
+    true;
+is_equivalent({_, _, _, RegisteredName}, {_, _, _, RegisteredName}) ->
+    true;
+is_equivalent(_, _) ->
+    false.
+
+equivalents_signature(#node{ type = Type, name = Name, proc_info = undefined }) ->
+    {Type, Name, undefined, undefined};
+equivalents_signature(#node{ type = Type, name = Name, proc_info = ProcInfo }) ->
+    {Type, Name, proplists:get_value(pid, ProcInfo), proplists:get_value(registered_name, ProcInfo)}.
 
 %%%%%%%%%%%%%%%%%%%%%%% capturing data
 
@@ -188,8 +221,32 @@ node(Node, {Name, Pid, supervisor, _Mods}, ProcInfos) ->
           name      = name(Name, ProcInfo),
           proc_info = ProcInfo,
           totals    = #totals{},
-          children  = [node(Node, Process, ProcInfos) || Process <- rpc:call(Node, supervisor, which_children, [Pid])]
+          children  = maybe_pool([node(Node, Process, ProcInfos) || Process <- rpc:call(Node, supervisor, which_children, [Pid])], Name)
     }.
+
+maybe_pool([], _) ->
+    [];
+maybe_pool([Node], _) ->
+    [Node];
+maybe_pool(Members, SupervisorName) ->
+    AllWorkers = lists:all(fun(M) -> M#node.type == worker end, Members),
+    InitialCalls =
+    [proplists:get_value('$initial_call', proplists:get_value(dictionary, Member#node.proc_info))
+     || Member <- Members],
+    AllSameCalls = length(lists:usort(InitialCalls)) == 1,
+    case AllWorkers and AllSameCalls of
+        false  ->
+            Members;
+        true ->
+            [
+                #node{
+                    name     = atom_to_list(SupervisorName) ++ "_pool",
+                    type     = pool,
+                    children = Members,
+                    totals   = #totals{}
+                }
+            ]
+    end.
 
 proc_info_request(Node, Pid) when is_pid(Pid) ->
     Ref = make_ref(),
