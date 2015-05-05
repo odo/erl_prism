@@ -2,16 +2,19 @@
 -include("cecho.hrl").
 -include("include/erl_prism.hrl").
 
--export([start/1, capture_and_plot/2, plot/2]).
+-export([start/3, capture_and_plot/2, plot/2]).
 
 -define(HEADERHEIGHT, 2).
 -define(FOOTERHEIGHT, 5).
 -define(INDENT, 2).
 
-start(Node) ->
+start(Node, Cookie, Options) ->
+    erlang:set_cookie(node(), Cookie),
     application:set_env(erl_prism, node, Node),
-    application:start(erl_prism),
+    application:set_env(erl_prism, options, Options),
+    ok = application:start(erl_prism),
     Env = setup(),
+    erlang:register(erl_prism, self()),
     input(Node, Env).
 
 input(Node, Env) ->
@@ -20,8 +23,19 @@ input(Node, Env) ->
     input(Node, Capture, Env).
 
 input(Node, Capture, Env) ->
+
+    receive
+        capture ->
+            lager:info("auto-------------", []),
+            {CaptureCapture, EnvCapture} =  {capture_and_plot(Capture, Env), Env},
+            input(Node, CaptureCapture, EnvCapture)
+    after
+        0 -> noop
+    end,
+
+
     {CaptureNew, EnvNew} =
-    case [cecho:getch()] of
+    case [cecho:getch(100)] of
         [10] ->
             % capture
             {capture_and_plot(Capture, Env), Env};
@@ -52,12 +66,12 @@ input(Node, Capture, Env) ->
             {Capture, EnvPlot};
          "D" ->
             % left
-            PrevCapture = erl_prism_capture:prev_capture(),
+            PrevCapture = erl_prism_capture:next_capture(),
             EnvPlot     = plot(PrevCapture, Env),
             {PrevCapture, EnvPlot};
          "C" ->
             % right
-            NextCapture = erl_prism_capture:next_capture(),
+            NextCapture = erl_prism_capture:prev_capture(),
             EnvPlot     = plot(NextCapture, Env),
             {NextCapture, EnvPlot};
          " " ->
