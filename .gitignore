@@ -10,3 +10,4 @@ callgrind
 callgrind.out
 outfile.cgrind
 outfile.fprof
+console.log
