@@ -12,7 +12,9 @@ main(_) ->
     usage().
 
 usage() ->
-    io:format("usage: erl_prism host cookie [Options]\n"),
+    io:format("usage:\n\terl_prism host cookie [Options]\n", []),
+    io:format("options:\n", []),
+    io:format("\t-a [Integer]: auto-capture every n seconds\n", []),
     halt(1).
 
 parse_options([]) ->

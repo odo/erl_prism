@@ -46,7 +46,7 @@ handle_call({plot}, _From, State) ->
     erl_prism_utils:f(1,  0, "~s", [Tree#node.name], Header),
     erl_prism_utils:f(33, 0, "~p Procs", [ProcessCount], Header),
     erl_prism_utils:f(45, 0, "~4.10.0B-~2.10.0B-~2.10.0BT~2.10.0B:~2.10.0B:~2.10.0B", [Y, M, D, Hr, Min, Sec], Header),
-    erl_prism_utils:f(66, 0, "~p/~p", [CaptureCount - CaptureIndex + 1, CaptureCount], Header),
+    erl_prism_utils:f(66, 0, "~p/~p", [CaptureIndex, CaptureCount], Header),
     {RedsValue, RedsOOM} = erl_prism_utils:oom(Totals#totals.reductions, 1000),
     erl_prism_utils:maybe_hl(Mode, reductions, Header),
     erl_prism_utils:f(1,  1, "Reductions: ~.1f ~s/s", [RedsValue, RedsOOM], Header),

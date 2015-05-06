@@ -33,7 +33,7 @@ handle_call({capture}, _From, State) ->
     Capture = capture(State#state.node),
     CurrentCount = State#state.capture_count + 1,
     CaptureIndex = set_index_and_count(Capture, CurrentCount, CurrentCount),
-    {reply, CaptureIndex, State#state{ captures = [Capture | State#state.captures ], current_index = CurrentCount, capture_count = CurrentCount}};
+    {reply, CaptureIndex, State#state{ captures = State#state.captures ++ [Capture], current_index = CurrentCount, capture_count = CurrentCount}};
 
 handle_call({next_capture}, From, State) ->
     handle_call({get_capture, State#state.current_index + 1}, From, State);

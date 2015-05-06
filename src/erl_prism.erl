@@ -15,7 +15,14 @@ start(Node, Cookie, Options) ->
     ok = application:start(erl_prism),
     Env = setup(),
     erlang:register(erl_prism, self()),
+    wait_for_keystroke(),
     input(Node, Env).
+
+wait_for_keystroke() ->
+    WaitAndSend = fun() ->
+        erl_prism ! [cecho:getch()]
+    end,
+    spawn(WaitAndSend).
 
 input(Node, Env) ->
     Capture = erl_prism_capture:capture(),
@@ -24,21 +31,14 @@ input(Node, Env) ->
 
 input(Node, Capture, Env) ->
 
+    {CaptureNew, EnvNew, AskForNewKeystroke} =
     receive
         capture ->
-            lager:info("auto-------------", []),
-            {CaptureCapture, EnvCapture} =  {capture_and_plot(Capture, Env), Env},
-            input(Node, CaptureCapture, EnvCapture)
-    after
-        0 -> noop
-    end,
-
-
-    {CaptureNew, EnvNew} =
-    case [cecho:getch(100)] of
+            % auto-capture
+            {capture_and_plot(Capture, Env), Env, false};
         [10] ->
             % capture
-            {capture_and_plot(Capture, Env), Env};
+            {capture_and_plot(Capture, Env), Env, true};
          "r" ->
             switch_mode(reductions, Capture, Env);
          "m" ->
@@ -53,35 +53,47 @@ input(Node, Capture, Env) ->
             switch_mode(message_queue_len, Capture, Env);
          "x" ->
             erl_prism_export:export(Capture, Env),
-            {Capture, Env};
+            {Capture, Env, true};
          [66] ->
             % down
             EnvDown = Env#env{ cursor_y = Env#env.cursor_y + 1 },
             EnvPlot = plot(Capture, EnvDown),
-            {Capture, adjust_shift_y(EnvPlot)};
+            {Capture, adjust_shift_y(EnvPlot), true};
          [65] ->
             % up
             EnvUp   = Env#env{ cursor_y = max(1, Env#env.cursor_y - 1) },
             EnvPlot = plot(Capture, adjust_shift_y(EnvUp)),
-            {Capture, EnvPlot};
+            {Capture, EnvPlot, true};
          "D" ->
             % left
-            PrevCapture = erl_prism_capture:next_capture(),
+            PrevCapture = erl_prism_capture:prev_capture(),
             EnvPlot     = plot(PrevCapture, Env),
-            {PrevCapture, EnvPlot};
+            {PrevCapture, EnvPlot, true};
          "C" ->
             % right
-            NextCapture = erl_prism_capture:prev_capture(),
+            NextCapture = erl_prism_capture:next_capture(),
             EnvPlot     = plot(NextCapture, Env),
-            {NextCapture, EnvPlot};
+            {NextCapture, EnvPlot, true};
          " " ->
             % we toggle during plotting
             EnvPlot  = plot(Capture, Env#env{ toggle_open = true }),
             EnvPlot2 = plot(Capture, EnvPlot),
-            {Capture, EnvPlot2#env{ toggle_open = false }};
+            {Capture, EnvPlot2#env{ toggle_open = false }, true};
+        [-1] ->
+            {Capture, Env, true};
         _Else ->
-            {Capture, Env}
+            lager:info("got ~p\n", [_Else]),
+            {Capture, Env, true}
+        after
+            5 ->
+                {Capture, Env, false}
     end,
+
+    case AskForNewKeystroke of
+        true  -> wait_for_keystroke();
+        false -> noop
+    end,
+
     input(Node, CaptureNew, EnvNew).
 
 switch_mode(Mode, Capture, Env) ->
