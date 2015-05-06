@@ -1,6 +1,8 @@
 # erl_prism
 like htop for erlang nodes
 
+![erl_prism](../master/priv/badge.png?raw=true "erl_prism")
+
 ## installation
 
 ```
@@ -37,6 +39,7 @@ x                : export selected item as CSV
 
 `./erl_prism some_node@foobar.local zecookie`
 
+![screenshot](../master/priv/panel.png?raw=true "screenshot")
 
 ## explanation
 
