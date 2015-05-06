@@ -99,7 +99,7 @@ input(Node, Capture, Env) ->
 switch_mode(Mode, Capture, Env) ->
     EnvMode = Env#env{ mode = Mode },
     EnvPlot = plot(Capture, EnvMode),
-    {Capture, EnvPlot}.
+    {Capture, EnvPlot, true}.
 
 
 adjust_shift_y(Env = #env{ cursor_y = CursorY, shift_y = ShiftY, body_height = BodyHeight }) ->
