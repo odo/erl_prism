@@ -4,7 +4,7 @@ like htop for erlang nodes
 ![erl_prism](../master/priv/badge.png?raw=true "erl_prism")
 
 ## warning
-this software is experimental, do not point it at yout production system!
+this software is experimental, do not point it at your production system!
 
 ## installation
 
