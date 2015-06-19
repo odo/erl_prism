@@ -231,7 +231,7 @@ maybe_pool([Node], _) ->
 maybe_pool(Members, SupervisorName) ->
     AllWorkers = lists:all(fun(M) -> M#node.type == worker end, Members),
     InitialCalls =
-    [proplists:get_value('$initial_call', proplists:get_value(dictionary, Member#node.proc_info))
+    [proplists:get_value('$initial_call', proplists:get_value(dictionary, Member#node.proc_info, undefined))
      || Member <- Members],
     AllSameCalls = length(lists:usort(InitialCalls)) == 1,
     case AllWorkers and AllSameCalls of
