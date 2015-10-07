@@ -10,6 +10,7 @@
 
 start(Node, Cookie, Options) ->
     erlang:set_cookie(node(), Cookie),
+    test_connection(Node),
     application:set_env(erl_prism, node, Node),
     application:set_env(erl_prism, options, Options),
     ok = application:start(erl_prism),
@@ -17,6 +18,12 @@ start(Node, Cookie, Options) ->
     erlang:register(erl_prism, self()),
     wait_for_keystroke(),
     input(Node, Env).
+
+test_connection(Node) ->
+  case net_adm:ping(Node) of
+    pong -> ok;
+    pang -> throw({error, {can_not_connect, Node}})
+  end.
 
 wait_for_keystroke() ->
     WaitAndSend = fun() ->
