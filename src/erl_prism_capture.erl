@@ -2,7 +2,7 @@
 -behaviour(gen_server).
 
 -include("include/erl_prism.hrl").
--export([equivalents/1, capture/0, prev_capture/0, next_capture/0, proc_info_async/4]).
+-export([equivalents/1, capture/0, prev_capture/0, next_capture/0]).
 -export([start_link/1, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -record(state, {node, captures, capture_count, current_index}).
@@ -113,27 +113,54 @@ capture(Node) ->
         pang ->
             lager:info("can't connect to node, is the node up and are you using the right cookie?\n", []);
         pong ->
-            Pids             = rpc:call(Node, erlang, processes, []),
-            ProcInfoRefs     = [proc_info_request(Node, Pid) || Pid <- Pids],
-            ProcInfos        = [{Pid, proc_info_collect(Ref)} || {Pid, Ref} <- ProcInfoRefs],
+          {Mod, Bin, File} = code:get_object_code(?MODULE),
+          {module, ?MODULE} = rpc:call(Node, code, load_binary, [Mod, File, Bin]),
+          {Pids, ProcInfos} = proc_infos(Node),
 
-            Apps             = [App || {App, _, _} <- rpc:call(Node, application, which_applications, [])],
-            NodeChildren     = lists:filter(fun(E) -> E =/= undefined end, [application_proc_info_request(Node, App, ProcInfos) || App <- Apps]),
-            ProcsTree        = collect_pids(#node{type = node, name = Node, children = NodeChildren }),
-            ProcsNonTree     = Pids -- ProcsTree,
-            ProcInfosNonTree = lists:filter(fun(E) -> E =/= undefined end, [proplists:get_value(Pid, ProcInfos) || Pid <- ProcsNonTree]),
-            NodesNonTree     = [#node{ type = process, totals = #totals{}, name = name(undefined, PI), proc_info = PI } || PI <- ProcInfosNonTree],
-            NodesNonTreeSort = lists:sort(
-                                fun(#node{name=undefined}, #node{name=undefined}) -> true; (#node{name=undefined}, _) -> false; (_, #node{name=undefined}) -> true; (A, B) -> A =< B end,
-                                NodesNonTree),
-            NodeChildren2    = NodeChildren ++ NodesNonTreeSort,
-            Tree1            = #node{type = node, totals = #totals{}, name = Node, children = NodeChildren2 },
-            Tree2            = add_totals(Tree1, reductions),
-            Tree3            = add_totals(Tree2, memory),
-            Tree4            = add_totals(Tree3, message_queue_len),
-            lager:info("ProcsTree:~p ProcsNonTree:~p\n", [length(ProcsTree), length(ProcInfosNonTree)]),
-            #capture{ process_count = length(Pids), tree = Tree4, time = os:timestamp(), totals = Tree4#node.totals }
+          Apps              = [App || {App, _, _} <- rpc:call(Node, application, which_applications, [])],
+          NodeChildren      = lists:filter(fun(E) -> E =/= undefined end, [application_proc_info_request(Node, App, ProcInfos) || App <- Apps]),
+          ProcsTree         = collect_pids(#node{type = node, name = Node, children = NodeChildren }),
+          ProcsNonTree      = Pids -- ProcsTree,
+          ProcInfosNonTree  = lists:filter(fun(E) -> E =/= undefined end, [proplists:get_value(Pid, ProcInfos) || Pid <- ProcsNonTree]),
+          NodesNonTree      = [#node{ type = process, totals = #totals{}, name = name(undefined, PI), proc_info = PI } || PI <- ProcInfosNonTree],
+          NodesNonTreeSort  = lists:sort(
+                              fun(#node{name=undefined}, #node{name=undefined}) -> true; (#node{name=undefined}, _) -> false; (_, #node{name=undefined}) -> true; (A, B) -> A =< B end,
+                              NodesNonTree),
+          NodeChildren2     = NodeChildren ++ NodesNonTreeSort,
+          Tree1             = #node{type = node, totals = #totals{}, name = Node, children = NodeChildren2 },
+          Tree2             = add_totals(Tree1, reductions),
+          Tree3             = add_totals(Tree2, memory),
+          Tree4             = add_totals(Tree3, message_queue_len),
+          lager:info("ProcsTree:~p ProcsNonTree:~p\n", [length(ProcsTree), length(ProcInfosNonTree)]),
+          #capture{ process_count = length(Pids), tree = Tree4, time = os:timestamp(), totals = Tree4#node.totals }
     end.
+
+proc_infos(Node) ->
+            rpc:call(Node, erlang, apply, [
+              fun() ->
+                Fields     = [status, dictionary, reductions, current_function, heap_size, initial_call, memory, message_queue_len, registered_name],
+                Pids       = erlang:processes(),
+                Reductions = [{Pid, erlang:process_info(Pid, reductions)} || Pid <- Pids],
+                timer:sleep(250),
+                ProcInfos =
+                lists:map(
+                  fun
+                    ({_, undefined}) -> undefined;
+                    ({Pid, {reductions, Red1}}) ->
+                      case erlang:process_info(Pid, Fields) of
+                        undefined -> undefined;
+                        ProcInfo2 ->
+                          Red2      = proplists:get_value(reductions, ProcInfo2),
+                          RedPerS   = (Red2 - Red1) * 4,
+                          ProcInfo3 = [{reductions, RedPerS} | proplists:delete(reductions, ProcInfo2)],
+                          {Pid, [{pid, Pid} | ProcInfo3]}
+                      end
+                  end,
+                  Reductions
+                ),
+                {Pids, ProcInfos}
+              end,
+            []]).
 
 add_totals(Node, Type) ->
     {NewNodes, _} = add_totals2(Node, Type),
@@ -176,17 +203,6 @@ collect_pids(#node{ proc_info = undefined, children = Children }, Pids) ->
 collect_pids(#node{ proc_info = ProcInfo, children = Children }, Pids) ->
     Pid = proplists:get_value(pid, ProcInfo),
     [Pid | lists:foldl(fun(Child, Ps) -> collect_pids(Child, Ps) end, Pids, Children)].
-
-proc_info_collect(Ref) ->
-    ProcInfo =
-    receive
-        {proc_info, Ref, PI} ->
-            PI
-    after 10000 ->
-        throw(timeout)
-    end,
-    ProcInfo.
-
 
 application_proc_info_request(Node, App, ProcInfos) ->
     case app_pid(Node, App) of
@@ -256,29 +272,6 @@ maybe_pool(Members, SupervisorName) ->
             ]
     end.
 
-proc_info_request(Node, Pid) when is_pid(Pid) ->
-    Ref = make_ref(),
-    spawn_link(?MODULE, proc_info_async, [Node, Pid, self(), Ref]),
-    {Pid, Ref}.
-
-proc_info_async(Node, Pid, From, Ref) ->
-    Fields    = [status, dictionary, reductions, current_function, heap_size, initial_call, memory, message_queue_len, registered_name],
-    case rpc:call(Node, erlang, process_info, [Pid, reductions]) of
-        undefined ->
-            From ! {proc_info, Ref, undefined};
-        {reductions, Red1} ->
-            timer:sleep(250),
-            case rpc:call(Node, erlang, process_info, [Pid, Fields]) of
-                undefined ->
-                    From ! {proc_info, Ref, undefined};
-                ProcInfo2 ->
-                    Red2      = proplists:get_value(reductions, ProcInfo2),
-                    RedPerS     = (Red2 - Red1) * 4,
-                    ProcInfo3 = [{reductions, RedPerS} | proplists:delete(reductions, ProcInfo2)],
-                    ProcInfo4 = [{pid, Pid} | ProcInfo3],
-                    From ! {proc_info, Ref, ProcInfo4}
-            end
-    end.
 
 name(undefined, undefined) ->
     undefined;
@@ -296,4 +289,3 @@ name(Name, undefined) ->
 name(Name, ProcInfo) ->
     {ModC, FunC, _} = proplists:get_value(current_function, ProcInfo),
     iolist_to_binary(io_lib:format("~p@~p:~p", [Name, ModC, FunC])).
-
