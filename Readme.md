@@ -16,6 +16,8 @@ cd erl_prism
 
 ## usage
 
+make sure you set `export TERM=xterm-256color`
+
 ### starting
 
 ```
