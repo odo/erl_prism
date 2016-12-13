@@ -264,7 +264,7 @@ maybe_pool(Members, SupervisorName) ->
         true ->
             [
                 #node{
-                    name     = atom_to_list(SupervisorName) ++ "_pool",
+                    name     = io_lib:format("~p", [SupervisorName]) ++ "_pool",
                     type     = pool,
                     children = Members,
                     totals   = #totals{}

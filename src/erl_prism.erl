@@ -276,15 +276,15 @@ maybe_highlight_pool(Fun, _, #env{ body = Body }) ->
     Fun().
 
 print(_, Node = #node{ type = node }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~s ", [Node#node.name], {totals(Env#env.mode, Env), totals(Env#env.mode, Env), totals(Env#env.mode, Env)}, Env);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "n: ~p ", [Node#node.name], {totals(Env#env.mode, Env), totals(Env#env.mode, Env), totals(Env#env.mode, Env)}, Env);
 print(Parent, Node = #node{ type = application }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~s ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "a: ~p ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
 print(Parent, Node = #node{ type = supervisor }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~s ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "s: ~p ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
 print(Parent, Node = #node{ type = worker }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~s ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "w: ~p ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
 print(Parent, Node = #node{ type = process }, Env) ->
-    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~s ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
+    f(Env#env.x, Env#env.y - Env#env.shift_y, "p: ~p ", [Node#node.name], {totals(Env#env.mode, Env), erl_prism_utils:total(Env#env.mode, Node), erl_prism_utils:total(Env#env.mode, Parent)}, Env);
 print(_, #node{ type = Type }, _) ->
     lager:info("unkonwn type: ~p\n", [Type]).
 
